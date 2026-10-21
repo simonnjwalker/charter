@@ -7,5 +7,5 @@ You will need to map a MariaDb/MySQL database in the charter-config.rename.php f
 
 # samples
 This is an example of a fixed-layout flowchart template suitable for junior students.
-http://pimlicoshs.ipto.com.au/Teacher/2049apps/charter/charter.php?template=dd620903d6965a059fec1fb8e01d1186&layout=fixed-vertical&source=hide
+http://pimlicoshs.ipto.com.au/Teacher/2049apps/charter/charter.php?template=3a1666c6099d21f0b10824cf4695156b
 

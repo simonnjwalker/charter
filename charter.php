@@ -1,8 +1,3094 @@
 <?php
+/* Charter 0.0.3: fourth diagram type, Mind Map. The original MindCanvas editor
+ * runs under this router, sharing Charter's configuration and PHP entrypoint. */
+
+/** Charter 0.0.3 unified schema bootstrap. Idempotent on each request. */
+function charter_schema_bootstrap($db) {
+    static $ready = false;
+    if ($ready) return;
+    $statements = array(
+        "CREATE TABLE IF NOT EXISTS charter_projects (share_key CHAR(32) NOT NULL PRIMARY KEY,title VARCHAR(255) NOT NULL,project_json LONGTEXT NOT NULL,created_at DATETIME NOT NULL,updated_at DATETIME NOT NULL,KEY idx_charter_updated(updated_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+        "CREATE TABLE IF NOT EXISTS charter_templates (template_key CHAR(32) NOT NULL PRIMARY KEY,title VARCHAR(255) NOT NULL,description VARCHAR(500) NOT NULL,diagram_type VARCHAR(30) NOT NULL DEFAULT 'flowchart',source_type VARCHAR(30) NOT NULL DEFAULT 'flowgorithm',project_json LONGTEXT NOT NULL,created_at DATETIME NOT NULL,KEY idx_charter_template_created(created_at),KEY idx_charter_template_type(diagram_type)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+    foreach ($statements as $sql) {
+        if (!$db->query($sql)) throw new RuntimeException('Charter automatic database setup failed: '.$db->error);
+    }
+    // Apply only additive changes to already-existing shared Charter tables.
+    $required = array(
+        'charter_projects' => array('title'=>"VARCHAR(255) NOT NULL DEFAULT ''",'project_json'=>'LONGTEXT','created_at'=>'DATETIME NULL','updated_at'=>'DATETIME NULL'),
+        'charter_templates' => array('title'=>"VARCHAR(255) NOT NULL DEFAULT ''",'description'=>"VARCHAR(500) NOT NULL DEFAULT ''",'diagram_type'=>"VARCHAR(30) NOT NULL DEFAULT 'flowchart'",'source_type'=>"VARCHAR(30) NOT NULL DEFAULT 'flowgorithm'",'project_json'=>'LONGTEXT','created_at'=>'DATETIME NULL')
+    );
+    foreach ($required as $table => $columns) {
+        $known = array();
+        $result = $db->query('SHOW COLUMNS FROM `'.$table.'`');
+        if (!$result) throw new RuntimeException('Could not inspect Charter schema: '.$db->error);
+        while ($item=$result->fetch_assoc()) $known[$item['Field']] = true;
+        $result->free();
+        foreach ($columns as $column=>$type) if (!isset($known[$column])) {
+            if (!$db->query('ALTER TABLE `'.$table.'` ADD COLUMN `'.$column.'` '.$type)) throw new RuntimeException('Charter schema update failed: '.$db->error);
+        }
+    }
+    $indexes = array(
+        'charter_projects'=>array('idx_charter_updated'=>'updated_at'),
+        'charter_templates'=>array('idx_charter_template_created'=>'created_at','idx_charter_template_type'=>'diagram_type')
+    );
+    foreach ($indexes as $table=>$indexFields) {
+        $result=$db->query('SHOW INDEX FROM `'.$table.'`');
+        if (!$result) throw new RuntimeException('Could not inspect Charter indexes: '.$db->error);
+        $existing=array();while($item=$result->fetch_assoc())$existing[$item['Key_name']]=true;
+        $result->free();
+        foreach($indexFields as $index=>$field)if(!isset($existing[$index])) {
+            if(!$db->query('CREATE INDEX `'.$index.'` ON `'.$table.'` (`'.$field.'`)'))throw new RuntimeException('Charter index update failed: '.$db->error);
+        }
+    }
+    $ready=true;
+}
+function charter_auto_connect($host,$name,$user,$password) {
+    mysqli_report(MYSQLI_REPORT_OFF);
+    $db = @new mysqli($host,$user,$password,$name);
+    if ($db->connect_errno) {
+        // Database creation is attempted only when the configured name is a safe SQL identifier.
+        if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/D', (string)$name)) throw new RuntimeException('Database connection failed; invalid database name for automatic creation.');
+        $server = @new mysqli($host,$user,$password);
+        if ($server->connect_errno) throw new RuntimeException('Database connection failed: '.$server->connect_error);
+        if (!$server->query('CREATE DATABASE IF NOT EXISTS `'.$name.'` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci') || !$server->select_db($name)) {
+            $message=$server->error; $server->close(); throw new RuntimeException('Could not create/select Charter database: '.$message);
+        }
+        $db=$server;
+    }
+    if (!$db->set_charset('utf8mb4')) throw new RuntimeException('Could not set UTF-8 charset: '.$db->error);
+    charter_schema_bootstrap($db);
+    return $db;
+}
+
+if (isset($_GET['mindmap']) || (isset($_GET['new']) && $_GET['new'] === 'mindmap') || (isset($_GET['diagram']) && $_GET['diagram'] === 'mindmap')) {
+?>
+<?php
+/**
+ * MindCanvas - single-file mind-map application.
+ * Build: 2026-07-27-template-library
+ *
+ * Uses Charter's charter-config.php and unified database schema.
+ */
+
+/* The database variables are supplied only by charter-config.php. */
+require(__DIR__ . DIRECTORY_SEPARATOR . 'charter-config.php');
+
+if (!isset($urlRoot)) {
+    $urlRoot = '';
+}
+
+/* -------------------------------------------------------------------------
+ * Internal same-file server actions
+ * ---------------------------------------------------------------------- */
+$mindmapAction = isset($_GET['mindmap_action'])
+    ? trim((string)$_GET['mindmap_action'])
+    : '';
+
+if ($mindmapAction !== '') {
+    ini_set('display_errors', '0');
+    ini_set('display_startup_errors', '0');
+    error_reporting(E_ALL);
+    ob_start();
+}
+
+$mindmapResponseSent = false;
+
+function mindmap_clear_output()
+{
+    while (ob_get_level() > 0) {
+        @ob_end_clean();
+    }
+}
+
+function mindmap_json_response($data, $status)
+{
+    global $mindmapResponseSent;
+    $mindmapResponseSent = true;
+
+    if (is_array($data) && !isset($data['httpStatus'])) {
+        $data['httpStatus'] = (int)$status;
+    }
+
+    mindmap_clear_output();
+
+    /* A 200 transport status prevents some shared hosts from replacing the
+     * JSON body with a generic HTML error page. The real status is included
+     * in the response and in X-MindCanvas-Status. */
+    http_response_code(200);
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store, no-cache, must-revalidate');
+    header('Pragma: no-cache');
+    header('X-MindCanvas-Status: ' . (int)$status);
+
+    $json = json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if ($json === false) {
+        $json = '{"ok":false,"error":"The server could not create a JSON response.","httpStatus":500}';
+    }
+
+    echo $json;
+    exit;
+}
+
+if ($mindmapAction !== '') {
+    register_shutdown_function(function () {
+        global $mindmapResponseSent;
+
+        if ($mindmapResponseSent) {
+            return;
+        }
+
+        $error = error_get_last();
+        if (!$error) {
+            return;
+        }
+
+        $fatalTypes = array(E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR);
+        if (!in_array($error['type'], $fatalTypes, true)) {
+            return;
+        }
+
+        mindmap_clear_output();
+        http_response_code(200);
+        header('Content-Type: application/json; charset=utf-8');
+        header('Cache-Control: no-store');
+        header('X-MindCanvas-Status: 500');
+
+        echo json_encode(array(
+            'ok' => false,
+            'error' => 'PHP fatal error: ' . $error['message'],
+            'errorFile' => basename($error['file']),
+            'errorLine' => (int)$error['line'],
+            'httpStatus' => 500
+        ));
+    });
+}
+
+function mindmap_valid_share_key($value)
+{
+    return is_string($value) && preg_match('/^[a-f0-9]{32}$/i', $value) === 1;
+}
+
+function mindmap_database_connection()
+{
+    global $dbHost, $dbName, $dbUser, $dbPassword;
+
+    foreach (array('dbHost', 'dbName', 'dbUser', 'dbPassword') as $variable) {
+        if (!isset($GLOBALS[$variable])) {
+            throw new RuntimeException('charter-config.php is missing $' . $variable . '.');
+        }
+    }
+
+    if (trim((string)$dbHost) === '' || trim((string)$dbName) === '' || trim((string)$dbUser) === '') {
+        throw new RuntimeException('charter-config.php contains an empty database host, name or user.');
+    }
+
+    if (!extension_loaded('mysqli')) {
+        throw new RuntimeException('The PHP MySQLi extension is not enabled on this server.');
+    }
+
+    mysqli_report(MYSQLI_REPORT_OFF);
+    $mysqli = charter_auto_connect($dbHost, $dbName, $dbUser, $dbPassword);
+
+    if ($mysqli->connect_errno) {
+        throw new RuntimeException(
+            'Database connection failed. MySQL error ' .
+            $mysqli->connect_errno . ': ' . $mysqli->connect_error
+        );
+    }
+
+    if (!$mysqli->set_charset('utf8mb4') && !$mysqli->set_charset('utf8')) {
+        $number = $mysqli->errno;
+        $message = $mysqli->error;
+        $mysqli->close();
+        throw new RuntimeException(
+            'The database character set could not be configured. MySQL error ' .
+            $number . ': ' . $message
+        );
+    }
+
+    return $mysqli;
+}
+
+function mindmap_database_prepare($mysqli, $sql)
+{
+    $statement = $mysqli->prepare($sql);
+    if ($statement === false) {
+        throw new RuntimeException(
+            'Database statement preparation failed. MySQL error ' .
+            $mysqli->errno . ': ' . $mysqli->error
+        );
+    }
+    return $statement;
+}
+
+function mindmap_database_execute($statement)
+{
+    if (!$statement->execute()) {
+        throw new RuntimeException(
+            'Database statement execution failed. MySQL error ' .
+            $statement->errno . ': ' . $statement->error
+        );
+    }
+}
+
+function mindmap_database_key_exists($mysqli, $shareKey)
+{
+    $statement = mindmap_database_prepare(
+        $mysqli,
+        'SELECT share_key FROM charter_projects WHERE share_key = ? LIMIT 1'
+    );
+
+    if (!$statement->bind_param('s', $shareKey)) {
+        $number = $statement->errno;
+        $message = $statement->error;
+        $statement->close();
+        throw new RuntimeException(
+            'The share-key parameter could not be bound. MySQL error ' .
+            $number . ': ' . $message
+        );
+    }
+
+    mindmap_database_execute($statement);
+
+    if (!$statement->bind_result($foundShareKey)) {
+        $number = $statement->errno;
+        $message = $statement->error;
+        $statement->close();
+        throw new RuntimeException(
+            'The share-key result could not be read. MySQL error ' .
+            $number . ': ' . $message
+        );
+    }
+
+    $exists = $statement->fetch() === true;
+    $statement->close();
+    return $exists;
+}
+
+function mindmap_generate_share_key()
+{
+    if (function_exists('random_bytes')) {
+        return bin2hex(random_bytes(16));
+    }
+
+    if (function_exists('openssl_random_pseudo_bytes')) {
+        $strong = false;
+        $bytes = openssl_random_pseudo_bytes(16, $strong);
+        if ($bytes !== false && strlen($bytes) === 16) {
+            return bin2hex($bytes);
+        }
+    }
+
+    if (function_exists('mcrypt_create_iv') && defined('MCRYPT_DEV_URANDOM')) {
+        $bytes = mcrypt_create_iv(16, MCRYPT_DEV_URANDOM);
+        if ($bytes !== false && strlen($bytes) === 16) {
+            return bin2hex($bytes);
+        }
+    }
+
+    return substr(
+        hash('sha256', uniqid((string)mt_rand(), true) . microtime(true)),
+        0,
+        32
+    );
+}
+
+function mindmap_secure_equals($known, $provided)
+{
+    $known = (string)$known;
+    $provided = (string)$provided;
+
+    if (function_exists('hash_equals')) {
+        return hash_equals($known, $provided);
+    }
+
+    if (strlen($known) !== strlen($provided)) {
+        return false;
+    }
+
+    $difference = 0;
+    for ($index = 0, $length = strlen($known); $index < $length; $index++) {
+        $difference |= ord($known[$index]) ^ ord($provided[$index]);
+    }
+    return $difference === 0;
+}
+
+function mindmap_html_escape($value)
+{
+    return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
+}
+
+function mindmap_builtin_templates()
+{
+    return array(
+        'brainstorming' => array(
+            'title' => 'Brainstorming',
+            'category' => 'Ideas',
+            'description' => 'Generate, group and evaluate ideas around a central challenge.',
+            'root' => 'Central challenge',
+            'branches' => array(
+                array('What we know', array('Facts', 'Evidence', 'Assumptions')),
+                array('Possible ideas', array('Safe ideas', 'Bold ideas', 'Unexpected ideas')),
+                array('People affected', array('Users', 'Decision-makers', 'Community')),
+                array('Constraints', array('Time', 'Cost', 'Resources')),
+                array('Next steps', array('Shortlist', 'Test', 'Choose'))
+            )
+        ),
+        'essay-planner' => array(
+            'title' => 'Essay Planner',
+            'category' => 'Writing',
+            'description' => 'Plan a thesis, body paragraphs, evidence and conclusion.',
+            'root' => 'Essay question',
+            'branches' => array(
+                array('Thesis', array('Main contention', 'Key terms', 'Scope')),
+                array('Paragraph 1', array('Topic sentence', 'Evidence', 'Explanation')),
+                array('Paragraph 2', array('Topic sentence', 'Evidence', 'Explanation')),
+                array('Paragraph 3', array('Topic sentence', 'Evidence', 'Explanation')),
+                array('Conclusion', array('Restate thesis', 'Synthesis', 'Final insight'))
+            )
+        ),
+        'project-plan' => array(
+            'title' => 'Project Plan',
+            'category' => 'Planning',
+            'description' => 'Define project scope, milestones, responsibilities, risks and delivery.',
+            'root' => 'Project',
+            'branches' => array(
+                array('Purpose', array('Problem', 'Objectives', 'Success measures')),
+                array('Scope', array('Included', 'Excluded', 'Deliverables')),
+                array('People', array('Sponsor', 'Team', 'Stakeholders')),
+                array('Timeline', array('Start', 'Milestones', 'Finish')),
+                array('Risks', array('Likelihood', 'Impact', 'Controls'))
+            )
+        ),
+        'swot-analysis' => array(
+            'title' => 'SWOT Analysis',
+            'category' => 'Strategy',
+            'description' => 'Examine internal strengths and weaknesses with external opportunities and threats.',
+            'root' => 'Organisation or idea',
+            'branches' => array(
+                array('Strengths', array('Capabilities', 'Resources', 'Advantages')),
+                array('Weaknesses', array('Gaps', 'Limitations', 'Dependencies')),
+                array('Opportunities', array('Trends', 'Partnerships', 'New markets')),
+                array('Threats', array('Competition', 'Change', 'External risks')),
+                array('Actions', array('Use strengths', 'Fix weaknesses', 'Prepare responses'))
+            )
+        ),
+        'study-notes' => array(
+            'title' => 'Study Notes',
+            'category' => 'Learning',
+            'description' => 'Organise a topic into concepts, vocabulary, examples and revision questions.',
+            'root' => 'Study topic',
+            'branches' => array(
+                array('Key concepts', array('Concept 1', 'Concept 2', 'Concept 3')),
+                array('Vocabulary', array('Term', 'Definition', 'Example')),
+                array('Examples', array('Case study', 'Worked example', 'Counterexample')),
+                array('Connections', array('Cause and effect', 'Compare', 'Apply')),
+                array('Revision', array('Recall question', 'Practice task', 'Check answer'))
+            )
+        ),
+        'scientific-investigation' => array(
+            'title' => 'Scientific Investigation',
+            'category' => 'Science',
+            'description' => 'Plan a research question, method, data analysis and evaluation.',
+            'root' => 'Investigation',
+            'branches' => array(
+                array('Question', array('Observation', 'Variables', 'Hypothesis')),
+                array('Method', array('Equipment', 'Procedure', 'Safety')),
+                array('Data', array('Measurements', 'Table', 'Graph')),
+                array('Analysis', array('Patterns', 'Calculations', 'Anomalies')),
+                array('Evaluation', array('Conclusion', 'Limitations', 'Improvements'))
+            )
+        ),
+        'legal-case-analysis' => array(
+            'title' => 'Legal Case Analysis',
+            'category' => 'Law',
+            'description' => 'Map the material facts, issues, law, reasoning and outcome of a case.',
+            'root' => 'Case name',
+            'branches' => array(
+                array('Material facts', array('Parties', 'Events', 'Procedural history')),
+                array('Legal issues', array('Issue 1', 'Issue 2', 'Questions for decision')),
+                array('Law', array('Legislation', 'Precedent', 'Legal principles')),
+                array('Reasoning', array('Application', 'Arguments', 'Court analysis')),
+                array('Outcome', array('Orders', 'Ratio', 'Significance'))
+            )
+        ),
+        'historical-event' => array(
+            'title' => 'Historical Event',
+            'category' => 'History',
+            'description' => 'Analyse the causes, participants, chronology, consequences and evidence.',
+            'root' => 'Historical event',
+            'branches' => array(
+                array('Background', array('Context', 'Long-term causes', 'Short-term causes')),
+                array('Participants', array('People', 'Groups', 'Institutions')),
+                array('Chronology', array('Before', 'During', 'After')),
+                array('Consequences', array('Immediate', 'Long-term', 'Different perspectives')),
+                array('Sources', array('Primary', 'Secondary', 'Reliability'))
+            )
+        ),
+        'geography-fieldwork' => array(
+            'title' => 'Geography Fieldwork',
+            'category' => 'Geography',
+            'description' => 'Plan inquiry questions, field methods, data presentation and conclusions.',
+            'root' => 'Fieldwork inquiry',
+            'branches' => array(
+                array('Location', array('Site', 'Scale', 'Characteristics')),
+                array('Inquiry', array('Question', 'Prediction', 'Geographic concepts')),
+                array('Data collection', array('Primary data', 'Secondary data', 'Sampling')),
+                array('Presentation', array('Maps', 'Graphs', 'Tables')),
+                array('Findings', array('Patterns', 'Explanation', 'Recommendation'))
+            )
+        ),
+        'business-plan' => array(
+            'title' => 'Business Plan',
+            'category' => 'Business',
+            'description' => 'Develop a value proposition, market approach, operations and financial plan.',
+            'root' => 'Business idea',
+            'branches' => array(
+                array('Value proposition', array('Customer problem', 'Solution', 'Difference')),
+                array('Market', array('Customers', 'Competitors', 'Promotion')),
+                array('Operations', array('Suppliers', 'Processes', 'People')),
+                array('Finance', array('Startup costs', 'Revenue', 'Cash flow')),
+                array('Growth', array('Milestones', 'Risks', 'Next investment'))
+            )
+        ),
+        'lesson-plan' => array(
+            'title' => 'Lesson Plan',
+            'category' => 'Education',
+            'description' => 'Map learning intentions, teaching sequence, differentiation and assessment.',
+            'root' => 'Lesson topic',
+            'branches' => array(
+                array('Learning', array('Learning intention', 'Success criteria', 'Prior knowledge')),
+                array('Opening', array('Hook', 'Review', 'Explain purpose')),
+                array('Teaching', array('Model', 'Guided practice', 'Checks for understanding')),
+                array('Student activity', array('Task', 'Resources', 'Differentiation')),
+                array('Closure', array('Exit ticket', 'Feedback', 'Next lesson'))
+            )
+        ),
+        'meeting-agenda' => array(
+            'title' => 'Meeting Agenda',
+            'category' => 'Work',
+            'description' => 'Prepare meeting outcomes, discussion items, decisions and follow-up actions.',
+            'root' => 'Meeting',
+            'branches' => array(
+                array('Purpose', array('Desired outcome', 'Attendees', 'Preparation')),
+                array('Updates', array('Progress', 'Data', 'Announcements')),
+                array('Discussion', array('Issue 1', 'Issue 2', 'Options')),
+                array('Decisions', array('Decision needed', 'Decision made', 'Rationale')),
+                array('Actions', array('Task', 'Owner', 'Due date'))
+            )
+        ),
+        'decision-making' => array(
+            'title' => 'Decision Making',
+            'category' => 'Problem Solving',
+            'description' => 'Compare options against criteria, risks and likely consequences.',
+            'root' => 'Decision',
+            'branches' => array(
+                array('Goal', array('What matters', 'Required outcome', 'Constraints')),
+                array('Criteria', array('Cost', 'Benefit', 'Feasibility')),
+                array('Option A', array('Advantages', 'Disadvantages', 'Risks')),
+                array('Option B', array('Advantages', 'Disadvantages', 'Risks')),
+                array('Choice', array('Preferred option', 'Reasons', 'Review date'))
+            )
+        ),
+        'problem-solving' => array(
+            'title' => 'Problem Solving',
+            'category' => 'Problem Solving',
+            'description' => 'Define a problem, identify causes, test solutions and evaluate results.',
+            'root' => 'Problem',
+            'branches' => array(
+                array('Define', array('Symptoms', 'Who is affected', 'Desired state')),
+                array('Causes', array('People', 'Process', 'Environment')),
+                array('Solutions', array('Quick fix', 'Long-term fix', 'Alternative')),
+                array('Test', array('Small trial', 'Evidence', 'Feedback')),
+                array('Evaluate', array('Results', 'Lessons', 'Next action'))
+            )
+        ),
+        'book-review' => array(
+            'title' => 'Book Review',
+            'category' => 'Literature',
+            'description' => 'Organise plot, characters, themes, techniques and critical evaluation.',
+            'root' => 'Book title',
+            'branches' => array(
+                array('Context', array('Author', 'Genre', 'Setting')),
+                array('Plot', array('Beginning', 'Conflict', 'Resolution')),
+                array('Characters', array('Protagonist', 'Relationships', 'Development')),
+                array('Themes and techniques', array('Theme', 'Symbol', 'Language')),
+                array('Evaluation', array('Strengths', 'Weaknesses', 'Recommendation'))
+            )
+        ),
+        'career-planning' => array(
+            'title' => 'Career Planning',
+            'category' => 'Personal',
+            'description' => 'Explore interests, strengths, pathways, experience and next actions.',
+            'root' => 'Career direction',
+            'branches' => array(
+                array('Interests', array('Activities', 'Subjects', 'Industries')),
+                array('Strengths', array('Skills', 'Qualifications', 'Personal qualities')),
+                array('Options', array('Career 1', 'Career 2', 'Career 3')),
+                array('Pathways', array('Study', 'Training', 'Experience')),
+                array('Action plan', array('This month', 'This year', 'Review'))
+            )
+        ),
+        'personal-goals' => array(
+            'title' => 'Personal Goals',
+            'category' => 'Personal',
+            'description' => 'Turn a broad goal into motivations, milestones, habits and review points.',
+            'root' => 'My goal',
+            'branches' => array(
+                array('Why', array('Motivation', 'Benefits', 'Values')),
+                array('Current position', array('Strengths', 'Barriers', 'Resources')),
+                array('Milestones', array('First step', 'Halfway point', 'Completion')),
+                array('Habits', array('Daily', 'Weekly', 'Support')),
+                array('Review', array('Measure', 'Reflect', 'Adjust'))
+            )
+        ),
+        'software-design' => array(
+            'title' => 'Software Design',
+            'category' => 'Technology',
+            'description' => 'Plan users, requirements, data, interface, logic and testing.',
+            'root' => 'Software solution',
+            'branches' => array(
+                array('Users', array('Primary user', 'Needs', 'Accessibility')),
+                array('Requirements', array('Functional', 'Non-functional', 'Constraints')),
+                array('Data', array('Inputs', 'Storage', 'Outputs')),
+                array('Design', array('Interface', 'Algorithms', 'Architecture')),
+                array('Testing', array('Test cases', 'Validation', 'Evaluation'))
+            )
+        ),
+        'event-planning' => array(
+            'title' => 'Event Planning',
+            'category' => 'Planning',
+            'description' => 'Coordinate purpose, program, venue, people, promotion and contingencies.',
+            'root' => 'Event',
+            'branches' => array(
+                array('Purpose', array('Audience', 'Outcome', 'Theme')),
+                array('Program', array('Schedule', 'Activities', 'Speakers')),
+                array('Logistics', array('Venue', 'Equipment', 'Catering')),
+                array('People', array('Team', 'Guests', 'Suppliers')),
+                array('Delivery', array('Promotion', 'Budget', 'Contingency'))
+            )
+        ),
+        'research-report' => array(
+            'title' => 'Research Report',
+            'category' => 'Research',
+            'description' => 'Structure a research question, sources, findings, analysis and recommendations.',
+            'root' => 'Research topic',
+            'branches' => array(
+                array('Question', array('Purpose', 'Scope', 'Key terms')),
+                array('Method', array('Sources', 'Data collection', 'Limitations')),
+                array('Findings', array('Finding 1', 'Finding 2', 'Finding 3')),
+                array('Analysis', array('Patterns', 'Interpretation', 'Alternative views')),
+                array('Conclusion', array('Answer', 'Implications', 'Recommendations'))
+            )
+        )
+    );
+}
+
+function mindmap_template_style($isRoot, $branchColor)
+{
+    return array(
+        'font' => array(
+            'style' => 'normal',
+            'weight' => $isRoot ? 'bold' : 'normal',
+            'decoration' => 'none',
+            'fontfamily' => 'sans-serif',
+            'size' => $isRoot ? 20 : 15,
+            'color' => '#000000',
+            'horizontalAlign' => 'center',
+            'verticalAlign' => 'middle'
+        ),
+        'border' => array(
+            'visible' => true,
+            'style' => $isRoot ? 'solid' : 'dashed',
+            'color' => $isRoot ? '#d78100' : $branchColor,
+            'background' => '#ffffff'
+        ),
+        'lineWidthOffset' => 0,
+        'lineType' => 'curved',
+        'branchColor' => $branchColor
+    );
+}
+
+function mindmap_build_template_project($definition)
+{
+    $palette = array('#3366ff', '#e74c3c', '#00a8a8', '#9b59b6', '#f39c12', '#607d8b');
+    $rootId = mindmap_generate_project_id();
+    $root = array(
+        'id' => $rootId,
+        'parentId' => null,
+        'text' => array('caption' => $definition['root']),
+        'children' => array()
+    );
+
+    $style = array($rootId => mindmap_template_style(true, '#f39c12'));
+    $layout = array($rootId => array('offset' => array('x' => 0, 'y' => 0), 'foldChildren' => false));
+    $image = array($rootId => array());
+    $attachment = array($rootId => array());
+    $url = array($rootId => array());
+
+    $rightTotal = 0;
+    $leftTotal = 0;
+    foreach ($definition['branches'] as $branchIndex => $branch) {
+        if ($branchIndex % 2 === 0) {
+            $rightTotal++;
+        } else {
+            $leftTotal++;
+        }
+    }
+    $rightRow = 0;
+    $leftRow = 0;
+
+    foreach ($definition['branches'] as $branchIndex => $branch) {
+        $side = $branchIndex % 2 === 0 ? 1 : -1;
+        $row = $side === 1 ? $rightRow++ : $leftRow++;
+        $total = $side === 1 ? $rightTotal : $leftTotal;
+        $colour = $palette[$branchIndex % count($palette)];
+        $branchId = mindmap_generate_project_id();
+        $branchNode = array(
+            'id' => $branchId,
+            'parentId' => $rootId,
+            'text' => array('caption' => $branch[0]),
+            'children' => array()
+        );
+
+        $branchY = ($row - (($total - 1) / 2)) * 150;
+        $style[$branchId] = mindmap_template_style(false, $colour);
+        $layout[$branchId] = array('offset' => array('x' => $side * 245, 'y' => $branchY), 'foldChildren' => false);
+        $image[$branchId] = array();
+        $attachment[$branchId] = array();
+        $url[$branchId] = array();
+
+        $childCount = count($branch[1]);
+        foreach ($branch[1] as $childIndex => $childCaption) {
+            $childId = mindmap_generate_project_id();
+            $branchNode['children'][] = array(
+                'id' => $childId,
+                'parentId' => $branchId,
+                'text' => array('caption' => $childCaption),
+                'children' => array()
+            );
+            $style[$childId] = mindmap_template_style(false, $colour);
+            $style[$childId]['font']['size'] = 14;
+            $layout[$childId] = array(
+                'offset' => array(
+                    'x' => $side * 205,
+                    'y' => ($childIndex - (($childCount - 1) / 2)) * 72
+                ),
+                'foldChildren' => false
+            );
+            $image[$childId] = array();
+            $attachment[$childId] = array();
+            $url[$childId] = array();
+        }
+
+        $root['children'][] = $branchNode;
+    }
+
+    $milliseconds = round(microtime(true) * 1000);
+    return array(
+        'id' => mindmap_generate_project_id(),
+        'title' => $definition['title'],
+        'mindmap' => array('root' => $root),
+        'dates' => array('created' => $milliseconds, 'modified' => $milliseconds),
+        'dimensions' => array('x' => 16000, 'y' => 8000),
+        'autosave' => false,
+        'pluginData' => array(
+            'style' => $style,
+            'layout' => $layout,
+            'image' => $image,
+            'attachment' => $attachment,
+            'url' => $url
+        ),
+        'cnodes' => array()
+    );
+}
+
+function mindmap_prepare_template_copy($project)
+{
+    if (!is_array($project) || !isset($project['mindmap']['root'])) {
+        return null;
+    }
+
+    $milliseconds = round(microtime(true) * 1000);
+    $project['id'] = mindmap_generate_project_id();
+    $project['dates'] = array('created' => $milliseconds, 'modified' => $milliseconds);
+    $project['autosave'] = false;
+    return $project;
+}
+
+function mindmap_generate_project_id()
+{
+    $hex = mindmap_generate_share_key();
+    return substr($hex, 0, 8) . '-' .
+        substr($hex, 8, 4) . '-4' .
+        substr($hex, 13, 3) . '-a' .
+        substr($hex, 17, 3) . '-' .
+        substr($hex, 20, 12);
+}
+
+function mindmap_application_url()
+{
+    global $urlRoot;
+
+    if (isset($urlRoot) && trim((string)$urlRoot) !== '') {
+        return rtrim((string)$urlRoot, '/') . '/' . rawurlencode(basename(__FILE__));
+    }
+
+    $https = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== '' && $_SERVER['HTTPS'] !== 'off';
+    $scheme = $https ? 'https' : 'http';
+    $host = isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'localhost';
+    $path = isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : '/' . basename(__FILE__);
+    return $scheme . '://' . $host . $path;
+}
+
+function mindmap_share_url($shareKey)
+{
+    return mindmap_application_url() . '?mindmap=1&share=' . rawurlencode($shareKey);
+}
+
+function mindmap_new_session_url($shareKey)
+{
+    return mindmap_application_url() . '?mindmap=1&new_session=' . rawurlencode($shareKey);
+}
+
+function mindmap_read_request_body()
+{
+    if (isset($_POST['payload'])) {
+        return json_decode((string)$_POST['payload'], true);
+    }
+
+    $raw = file_get_contents('php://input');
+    return json_decode($raw, true);
+}
+
+if ($mindmapAction !== '') {
+    try {
+        if ($mindmapAction === 'load') {
+            $shareKey = isset($_GET['share'])
+                ? strtolower(trim((string)$_GET['share']))
+                : '';
+
+            if (!mindmap_valid_share_key($shareKey)) {
+                mindmap_json_response(array(
+                    'ok' => false,
+                    'error' => 'The shared-map link is not valid.'
+                ), 400);
+            }
+
+            $mysqli = mindmap_database_connection();
+            $statement = mindmap_database_prepare(
+                $mysqli,
+                'SELECT share_key, title, project_json, created_at, updated_at FROM charter_projects WHERE share_key = ? LIMIT 1'
+            );
+
+            if (!$statement->bind_param('s', $shareKey)) {
+                throw new RuntimeException(
+                    'The shared-map parameter could not be bound. MySQL error ' .
+                    $statement->errno . ': ' . $statement->error
+                );
+            }
+
+            mindmap_database_execute($statement);
+
+            if (!$statement->bind_result(
+                $rowShareKey,
+                $rowTitle,
+                $rowProjectJson,
+                $rowCreatedAt,
+                $rowUpdatedAt
+            )) {
+                throw new RuntimeException(
+                    'The shared-map result could not be read. MySQL error ' .
+                    $statement->errno . ': ' . $statement->error
+                );
+            }
+
+            if ($statement->fetch() !== true) {
+                $statement->close();
+                $mysqli->close();
+                mindmap_json_response(array(
+                    'ok' => false,
+                    'error' => 'The shared map could not be found.'
+                ), 404);
+            }
+
+            $project = json_decode($rowProjectJson, true);
+            $statement->close();
+            $mysqli->close();
+
+            if (!is_array($project) || !isset($project['mindmap']['root'])) {
+                mindmap_json_response(array(
+                    'ok' => false,
+                    'error' => 'The saved map contains invalid project data.'
+                ), 500);
+            }
+
+            mindmap_json_response(array(
+                'ok' => true,
+                'shareId' => $rowShareKey,
+                'shareUrl' => mindmap_share_url($rowShareKey),
+                'newSessionUrl' => mindmap_new_session_url($rowShareKey),
+                'project' => $project,
+                'created' => $rowCreatedAt,
+                'modified' => $rowUpdatedAt
+            ), 200);
+        }
+
+        if ($mindmapAction === 'clone' && isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+            $body = mindmap_read_request_body();
+            $sourceShareKey = is_array($body) && isset($body['shareId'])
+                ? strtolower(trim((string)$body['shareId']))
+                : '';
+
+            if (!mindmap_valid_share_key($sourceShareKey)) {
+                mindmap_json_response(array(
+                    'ok' => false,
+                    'error' => 'The new-session link is not valid.'
+                ), 400);
+            }
+
+            $mysqli = mindmap_database_connection();
+            $statement = mindmap_database_prepare(
+                $mysqli,
+                'SELECT title, project_json FROM charter_projects WHERE share_key = ? LIMIT 1'
+            );
+
+            if (!$statement->bind_param('s', $sourceShareKey)) {
+                throw new RuntimeException(
+                    'The source-map parameter could not be bound. MySQL error ' .
+                    $statement->errno . ': ' . $statement->error
+                );
+            }
+
+            mindmap_database_execute($statement);
+
+            if (!$statement->bind_result($sourceTitle, $sourceProjectJson)) {
+                throw new RuntimeException(
+                    'The source-map result could not be read. MySQL error ' .
+                    $statement->errno . ': ' . $statement->error
+                );
+            }
+
+            if ($statement->fetch() !== true) {
+                $statement->close();
+                $mysqli->close();
+                mindmap_json_response(array(
+                    'ok' => false,
+                    'error' => 'The source map for this new-session link could not be found.'
+                ), 404);
+            }
+            $statement->close();
+
+            $project = json_decode($sourceProjectJson, true);
+            if (!is_array($project) || !isset($project['mindmap']['root'])) {
+                $mysqli->close();
+                mindmap_json_response(array(
+                    'ok' => false,
+                    'error' => 'The source map contains invalid project data.'
+                ), 500);
+            }
+
+            $milliseconds = round(microtime(true) * 1000);
+            $project['id'] = mindmap_generate_project_id();
+            $project['dates'] = isset($project['dates']) && is_array($project['dates'])
+                ? $project['dates']
+                : array();
+            $project['dates']['created'] = $milliseconds;
+            $project['dates']['modified'] = $milliseconds;
+
+            $encoded = json_encode($project, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            if ($encoded === false) {
+                $mysqli->close();
+                mindmap_json_response(array(
+                    'ok' => false,
+                    'error' => 'The new session could not be converted to JSON.'
+                ), 500);
+            }
+
+            do {
+                $shareKey = mindmap_generate_share_key();
+            } while (mindmap_database_key_exists($mysqli, $shareKey));
+
+            $timestamp = date('Y-m-d H:i:s');
+            $statement = mindmap_database_prepare(
+                $mysqli,
+                'INSERT INTO charter_projects (share_key, title, project_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+            );
+
+            if (!$statement->bind_param(
+                'sssss',
+                $shareKey,
+                $sourceTitle,
+                $encoded,
+                $timestamp,
+                $timestamp
+            )) {
+                throw new RuntimeException(
+                    'The new-session parameters could not be bound. MySQL error ' .
+                    $statement->errno . ': ' . $statement->error
+                );
+            }
+
+            mindmap_database_execute($statement);
+            $statement->close();
+            $mysqli->close();
+
+            mindmap_json_response(array(
+                'ok' => true,
+                'shareId' => $shareKey,
+                'shareUrl' => mindmap_share_url($shareKey),
+                'newSessionUrl' => mindmap_new_session_url($sourceShareKey),
+                'sourceShareId' => $sourceShareKey,
+                'project' => $project,
+                'created' => $timestamp,
+                'modified' => $timestamp
+            ), 200);
+        }
+
+        if ($mindmapAction === 'save' && isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+            $body = mindmap_read_request_body();
+
+            if (!is_array($body) || !isset($body['project']) || !is_array($body['project'])) {
+                mindmap_json_response(array(
+                    'ok' => false,
+                    'error' => 'No valid project was supplied.'
+                ), 400);
+            }
+
+            if (!isset($body['project']['mindmap']['root'])) {
+                mindmap_json_response(array(
+                    'ok' => false,
+                    'error' => 'The project does not contain mindmap.root.'
+                ), 400);
+            }
+
+            $forceNew = !empty($body['forceNew']);
+            $providedShareKey = isset($body['shareId'])
+                ? strtolower(trim((string)$body['shareId']))
+                : '';
+
+            if ($forceNew) {
+                $providedShareKey = '';
+            }
+
+            if ($providedShareKey !== '' && !mindmap_valid_share_key($providedShareKey)) {
+                mindmap_json_response(array(
+                    'ok' => false,
+                    'error' => 'The shared-map identifier is not valid.'
+                ), 400);
+            }
+
+            $project = $body['project'];
+            $project['dates'] = isset($project['dates']) && is_array($project['dates'])
+                ? $project['dates']
+                : array();
+            $project['dates']['modified'] = round(microtime(true) * 1000);
+            if (!isset($project['dates']['created'])) {
+                $project['dates']['created'] = $project['dates']['modified'];
+            }
+
+            $encoded = json_encode($project, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            if ($encoded === false) {
+                mindmap_json_response(array(
+                    'ok' => false,
+                    'error' => 'The project could not be converted to JSON.'
+                ), 400);
+            }
+
+            $title = isset($project['title']) ? trim((string)$project['title']) : 'Mind map';
+            if ($title === '') {
+                $title = 'Mind map';
+            }
+            $title = function_exists('mb_substr')
+                ? mb_substr($title, 0, 255, 'UTF-8')
+                : substr($title, 0, 255);
+
+            $mysqli = mindmap_database_connection();
+            $timestamp = date('Y-m-d H:i:s');
+            $shareKey = $providedShareKey;
+            $updatedExisting = false;
+
+            if ($shareKey !== '') {
+                $statement = mindmap_database_prepare(
+                    $mysqli,
+                    'UPDATE charter_projects SET title = ?, project_json = ?, updated_at = ? WHERE share_key = ?'
+                );
+
+                if (!$statement->bind_param('ssss', $title, $encoded, $timestamp, $shareKey)) {
+                    throw new RuntimeException(
+                        'The update parameters could not be bound. MySQL error ' .
+                        $statement->errno . ': ' . $statement->error
+                    );
+                }
+
+                mindmap_database_execute($statement);
+                $updatedExisting = $statement->affected_rows > 0;
+                $statement->close();
+
+                if (!$updatedExisting) {
+                    $updatedExisting = mindmap_database_key_exists($mysqli, $shareKey);
+                }
+            }
+
+            if (!$updatedExisting) {
+                do {
+                    $shareKey = mindmap_generate_share_key();
+                } while (mindmap_database_key_exists($mysqli, $shareKey));
+
+                $statement = mindmap_database_prepare(
+                    $mysqli,
+                    'INSERT INTO charter_projects (share_key, title, project_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+                );
+
+                if (!$statement->bind_param(
+                    'sssss',
+                    $shareKey,
+                    $title,
+                    $encoded,
+                    $timestamp,
+                    $timestamp
+                )) {
+                    throw new RuntimeException(
+                        'The insert parameters could not be bound. MySQL error ' .
+                        $statement->errno . ': ' . $statement->error
+                    );
+                }
+
+                mindmap_database_execute($statement);
+                $statement->close();
+            }
+
+            $mysqli->close();
+
+            mindmap_json_response(array(
+                'ok' => true,
+                'shareId' => $shareKey,
+                'shareUrl' => mindmap_share_url($shareKey),
+                'newSessionUrl' => mindmap_new_session_url($shareKey),
+                'independentCopy' => $forceNew,
+                'modified' => $timestamp,
+                'project' => $project
+            ), 200);
+        }
+
+
+        if ($mindmapAction === 'save_template' && isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+            $body = mindmap_read_request_body();
+
+            if (!isset($adminPassword) || trim((string)$adminPassword) === '') {
+                mindmap_json_response(array(
+                    'ok' => false,
+                    'error' => 'charter-config.php must define a non-empty $adminPassword.'
+                ), 500);
+            }
+
+            $providedPassword = is_array($body) && isset($body['password'])
+                ? (string)$body['password']
+                : '';
+
+            if (!mindmap_secure_equals((string)$adminPassword, $providedPassword)) {
+                mindmap_json_response(array(
+                    'ok' => false,
+                    'error' => 'The administrator password is not correct.'
+                ), 403);
+            }
+
+            if (!is_array($body) || !isset($body['project']) || !is_array($body['project']) || !isset($body['project']['mindmap']['root'])) {
+                mindmap_json_response(array(
+                    'ok' => false,
+                    'error' => 'No valid mind-map project was supplied.'
+                ), 400);
+            }
+
+            $title = isset($body['title']) ? trim((string)$body['title']) : '';
+            if ($title === '') {
+                $title = isset($body['project']['title']) ? trim((string)$body['project']['title']) : 'Mind map template';
+            }
+            if ($title === '') {
+                $title = 'Mind map template';
+            }
+            $title = function_exists('mb_substr')
+                ? mb_substr($title, 0, 255, 'UTF-8')
+                : substr($title, 0, 255);
+
+            $description = isset($body['description']) ? trim((string)$body['description']) : '';
+            if ($description === '') {
+                $description = 'A community-created MindCanvas template.';
+            }
+            $description = function_exists('mb_substr')
+                ? mb_substr($description, 0, 500, 'UTF-8')
+                : substr($description, 0, 500);
+
+            $templateProject = mindmap_prepare_template_copy($body['project']);
+            $templateProject['title'] = $title;
+            $encoded = json_encode($templateProject, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            if ($encoded === false) {
+                mindmap_json_response(array(
+                    'ok' => false,
+                    'error' => 'The template could not be converted to JSON.'
+                ), 400);
+            }
+
+            $mysqli = mindmap_database_connection();
+            do {
+                $templateKey = mindmap_generate_share_key();
+                $checkStatement = mindmap_database_prepare(
+                    $mysqli,
+                    "SELECT template_key FROM charter_templates WHERE template_key = ? AND diagram_type = 'mindmap' LIMIT 1"
+                );
+                if (!$checkStatement->bind_param('s', $templateKey)) {
+                    throw new RuntimeException('The template-key parameter could not be bound.');
+                }
+                mindmap_database_execute($checkStatement);
+                if (!$checkStatement->bind_result($foundTemplateKey)) {
+                    throw new RuntimeException('The template-key result could not be read.');
+                }
+                $templateExists = $checkStatement->fetch() === true;
+                $checkStatement->close();
+            } while ($templateExists);
+
+            $timestamp = date('Y-m-d H:i:s');
+            $statement = mindmap_database_prepare(
+                $mysqli,
+                "INSERT INTO charter_templates (template_key, title, description, diagram_type, source_type, project_json, created_at) VALUES (?, ?, ?, 'mindmap', 'mindmap', ?, ?)"
+            );
+            if (!$statement->bind_param('sssss', $templateKey, $title, $description, $encoded, $timestamp)) {
+                throw new RuntimeException(
+                    'The template parameters could not be bound. MySQL error ' .
+                    $statement->errno . ': ' . $statement->error
+                );
+            }
+            mindmap_database_execute($statement);
+            $statement->close();
+            $mysqli->close();
+
+            mindmap_json_response(array(
+                'ok' => true,
+                'templateKey' => $templateKey,
+                'templateUrl' => mindmap_application_url() . '?mindmap=1&template=' . rawurlencode($templateKey),
+                'landingUrl' => mindmap_application_url(),
+                'title' => $title,
+                'description' => $description,
+                'created' => $timestamp
+            ), 200);
+        }
+
+        mindmap_json_response(array(
+            'ok' => false,
+            'error' => 'Unknown server action.'
+        ), 404);
+    } catch (Exception $error) {
+        /* Some shared hosts disable error_log(). Never let optional logging
+         * replace the useful JSON error response with a second PHP fatal error. */
+        if (function_exists('error_log')) {
+            @error_log('MindCanvas server error: ' . $error->getMessage());
+        }
+
+        mindmap_json_response(array(
+            'ok' => false,
+            'error' => $error->getMessage()
+        ), 500);
+    }
+}
+
+$initialShareId = isset($_GET['share']) && mindmap_valid_share_key(strtolower(trim((string)$_GET['share'])))
+    ? strtolower(trim((string)$_GET['share']))
+    : '';
+$initialNewSessionId = isset($_GET['new_session']) && mindmap_valid_share_key(strtolower(trim((string)$_GET['new_session'])))
+    ? strtolower(trim((string)$_GET['new_session']))
+    : '';
+$initialTemplateProject = null;
+$initialTemplateError = '';
+$showLandingPage = count(array_diff_key($_GET, array('mindmap' => true))) === 0;
+$builtInTemplates = mindmap_builtin_templates();
+$savedTemplates = array();
+$templateDatabaseError = '';
+
+if (isset($_GET['template'])) {
+    $requestedTemplate = strtolower(trim((string)$_GET['template']));
+    if (isset($builtInTemplates[$requestedTemplate])) {
+        $initialTemplateProject = mindmap_build_template_project($builtInTemplates[$requestedTemplate]);
+    } elseif (mindmap_valid_share_key($requestedTemplate)) {
+        try {
+            $mysqli = mindmap_database_connection();
+            $statement = mindmap_database_prepare(
+                $mysqli,
+                "SELECT title, project_json FROM charter_templates WHERE template_key = ? AND diagram_type = 'mindmap' LIMIT 1"
+            );
+            if (!$statement->bind_param('s', $requestedTemplate)) {
+                throw new RuntimeException('The template parameter could not be bound.');
+            }
+            mindmap_database_execute($statement);
+            if (!$statement->bind_result($templateTitle, $templateJson)) {
+                throw new RuntimeException('The template result could not be read.');
+            }
+            if ($statement->fetch() === true) {
+                $decodedTemplate = json_decode($templateJson, true);
+                $initialTemplateProject = mindmap_prepare_template_copy($decodedTemplate);
+                if (is_array($initialTemplateProject)) {
+                    $initialTemplateProject['title'] = $templateTitle;
+                }
+            } else {
+                $initialTemplateError = 'The requested template could not be found.';
+            }
+            $statement->close();
+            $mysqli->close();
+        } catch (Exception $error) {
+            $initialTemplateError = $error->getMessage();
+        }
+    } else {
+        $initialTemplateError = 'The requested template identifier is not valid.';
+    }
+}
+
+if ($showLandingPage) {
+    try {
+        $mysqli = mindmap_database_connection();
+        $result = $mysqli->query(
+            "SELECT template_key, title, description, created_at FROM charter_templates WHERE diagram_type = 'mindmap' ORDER BY created_at DESC LIMIT 100"
+        );
+        if ($result === false) {
+            throw new RuntimeException(
+                'Saved templates could not be loaded. MySQL error ' .
+                $mysqli->errno . ': ' . $mysqli->error
+            );
+        }
+        while ($row = $result->fetch_assoc()) {
+            $savedTemplates[] = $row;
+        }
+        $result->free();
+        $mysqli->close();
+    } catch (Exception $error) {
+        $templateDatabaseError = $error->getMessage();
+    }
+}
+?>
+<?php if ($showLandingPage): ?>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Charter · MindCanvas Templates</title>
+<style>
+:root{--ink:#1d2731;--muted:#66727f;--navy:#202831;--navy2:#151b22;--accent:#f39c12;--line:#d4dae0;--paper:#fff;--page:#eef1f4}
+*{box-sizing:border-box}body{margin:0;font-family:Inter,"Segoe UI",Arial,sans-serif;color:var(--ink);background:var(--page)}
+a{color:inherit}.landing-top{background:linear-gradient(180deg,var(--navy),var(--navy2));color:#fff;padding:18px 24px;box-shadow:0 2px 8px rgba(0,0,0,.25)}
+.landing-brand{max-width:1180px;margin:auto;display:flex;align-items:center;gap:12px;font-size:22px;font-weight:750}.landing-mark{width:34px;height:34px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#ffd16c,#f39c12 55%,#bd6300);box-shadow:inset 0 0 0 2px rgba(255,255,255,.25)}
+.landing-main{max-width:1180px;margin:auto;padding:34px 22px 55px}.hero{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:24px;align-items:center;margin-bottom:26px}.hero h1{margin:0 0 8px;font-size:34px}.hero p{margin:0;color:var(--muted);font-size:16px;line-height:1.55;max-width:760px}
+.blank-button{display:inline-block;text-decoration:none;background:var(--accent);border:1px solid #d78100;border-radius:6px;padding:12px 17px;font-weight:700;color:#202020;white-space:nowrap}.blank-button:hover{background:#ffad24}
+.section-title{display:flex;align-items:end;justify-content:space-between;gap:14px;margin:30px 0 12px}.section-title h2{margin:0;font-size:22px}.section-title span{color:var(--muted);font-size:13px}.template-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(245px,1fr));gap:14px}.template-card{display:flex;flex-direction:column;min-height:185px;background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:17px;box-shadow:0 2px 8px rgba(27,38,49,.07)}.template-card:hover{transform:translateY(-1px);box-shadow:0 5px 15px rgba(27,38,49,.12)}
+.template-category{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#a75d00;font-weight:750}.template-card h3{margin:7px 0 8px;font-size:18px}.template-card p{margin:0 0 15px;color:var(--muted);line-height:1.45;flex:1}.template-card a{align-self:flex-start;text-decoration:none;border:1px solid #b9c2cb;border-radius:5px;padding:7px 11px;background:#f8fafb;font-weight:650}.template-card a:hover{background:#edf2f6}.notice{padding:12px 14px;border:1px solid #e0b9b5;border-radius:6px;background:#fff7f6;color:#8a2d25;margin:14px 0}.empty{padding:18px;background:#fff;border:1px dashed var(--line);border-radius:7px;color:var(--muted)}
+@media(max-width:700px){.hero{grid-template-columns:1fr}.blank-button{justify-self:start}.hero h1{font-size:28px}}
+</style>
+</head>
+<body>
+<header class="landing-top"><div class="landing-brand"><span class="landing-mark"></span><span>Charter · Mind Map</span><label style="font-size:12px;margin-left:15px;color:#fff">Diagram
+<select aria-label="Diagram type" onchange="if(this.value!=='mindmap'){if(window.confirm('Open a new diagram? Unsaved changes may be lost.'))window.location.href='?new='+encodeURIComponent(this.value);else this.value='mindmap';}" style="padding:5px 8px;border-radius:4px"><option value="flowchart">Flowchart</option><option value="dfd">DFD</option><option value="erd">ERD</option><option value="mindmap" selected>MindCanvas · Mind map</option></select></label><a href="charter.php" style="font-size:12px;color:#fff;margin-left:15px;text-decoration:none;border:1px solid #68727d;padding:6px 9px;border-radius:5px">← All diagrams</a></div></header>
+<main class="landing-main">
+    <section class="hero">
+        <div><h1>Choose a mind-map template</h1><p>Start with a structured map for planning, learning, analysis or creative work. Each template opens as an independent editable project.</p></div>
+        <a class="blank-button" href="<?php echo mindmap_html_escape(mindmap_application_url() . '?mindmap=1&new=1'); ?>">Start a blank mind map</a>
+    </section>
+
+    <div class="section-title"><h2>Built-in templates</h2><span><?php echo count($builtInTemplates); ?> templates</span></div>
+    <section class="template-grid">
+    <?php foreach ($builtInTemplates as $templateSlug => $templateDefinition): ?>
+        <article class="template-card">
+            <div class="template-category"><?php echo mindmap_html_escape($templateDefinition['category']); ?></div>
+            <h3><?php echo mindmap_html_escape($templateDefinition['title']); ?></h3>
+            <p><?php echo mindmap_html_escape($templateDefinition['description']); ?></p>
+            <a href="<?php echo mindmap_html_escape(mindmap_application_url() . '?mindmap=1&template=' . rawurlencode($templateSlug)); ?>">Use template</a>
+        </article>
+    <?php endforeach; ?>
+    </section>
+
+    <div class="section-title"><h2>Saved templates</h2><span>Password-protected anonymous submissions</span></div>
+    <?php if ($templateDatabaseError !== ''): ?><div class="notice"><?php echo mindmap_html_escape($templateDatabaseError); ?></div><?php endif; ?>
+    <?php if (count($savedTemplates)): ?>
+    <section class="template-grid">
+    <?php foreach ($savedTemplates as $savedTemplate): ?>
+        <article class="template-card">
+            <div class="template-category">Community template</div>
+            <h3><?php echo mindmap_html_escape($savedTemplate['title']); ?></h3>
+            <p><?php echo mindmap_html_escape($savedTemplate['description']); ?></p>
+            <a href="<?php echo mindmap_html_escape(mindmap_application_url() . '?mindmap=1&template=' . rawurlencode($savedTemplate['template_key'])); ?>">Use template</a>
+        </article>
+    <?php endforeach; ?>
+    </section>
+    <?php else: ?>
+        <div class="empty">No additional saved templates are available yet. Open or create a map, then choose <strong>File → Save as template…</strong>.</div>
+    <?php endif; ?>
+</main>
+</body>
+</html>
+<?php exit; endif; ?>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Charter · Mind Map</title>
+<style>
+:root {
+    --topbar: #202831;
+    --topbar-2: #151b22;
+    --panel: #f7f8fa;
+    --panel-border: #cfd5dc;
+    --text: #1d2731;
+    --muted: #66727f;
+    --accent: #f39c12;
+    --accent-dark: #d78100;
+    --button: #ffffff;
+    --button-hover: #edf1f5;
+    --canvas: #eef1f4;
+    --selection: #e74c3c;
+    --shadow: 0 3px 14px rgba(0,0,0,.18);
+}
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+body { font-family: Inter, "Segoe UI", Arial, sans-serif; color: var(--text); background: var(--canvas); font-size: 14px; }
+button, input, select, textarea { font: inherit; }
+button { cursor: pointer; }
+.hidden { display: none !important; }
+.app { display: grid; grid-template-rows: 46px 44px minmax(0,1fr) 27px; width:100%; height:100%; }
+.topbar { display:flex; align-items:center; gap:14px; padding:0 14px; background:linear-gradient(180deg,var(--topbar),var(--topbar-2)); color:#fff; box-shadow:0 1px 4px rgba(0,0,0,.35); z-index:20; }
+.brand { display:flex; align-items:center; gap:9px; font-weight:700; letter-spacing:.2px; white-space:nowrap; }
+.brand-mark { width:27px; height:27px; border-radius:50%; background:radial-gradient(circle at 35% 35%,#ffd16c,#f39c12 55%,#bd6300); position:relative; box-shadow:inset 0 0 0 2px rgba(255,255,255,.25); }
+.brand-mark:before,.brand-mark:after { content:""; position:absolute; height:3px; background:#fff; border-radius:3px; transform-origin:left center; left:7px; top:13px; }
+.brand-mark:before { width:14px; transform:rotate(-32deg); }
+.brand-mark:after { width:13px; transform:rotate(35deg); }
+.menu-strip { display:flex; align-items:stretch; height:100%; }
+.menu { position:relative; }
+.menu > button { height:100%; color:#e8edf2; background:transparent; border:0; padding:0 10px; }
+.menu > button:hover,.menu.open > button { background:rgba(255,255,255,.1); color:#fff; }
+.dropdown { position:absolute; top:43px; left:0; min-width:225px; padding:6px; border-radius:5px; background:#fff; color:var(--text); box-shadow:var(--shadow); border:1px solid #c9ced5; display:none; z-index:100; }
+.menu.open .dropdown { display:block; }
+.dropdown button { width:100%; border:0; background:transparent; display:flex; justify-content:space-between; gap:20px; padding:8px 10px; border-radius:4px; text-align:left; color:var(--text); }
+.dropdown button:hover { background:#eef2f6; }
+.dropdown hr { border:0; border-top:1px solid #e0e4e8; margin:5px 0; }
+kbd { font-size:11px; color:#65717d; background:#f1f3f5; border:1px solid #d5d9dd; border-bottom-width:2px; border-radius:3px; padding:1px 4px; white-space:nowrap; }
+.title-wrap { margin-left:auto; display:flex; align-items:center; gap:7px; min-width:200px; max-width:440px; flex:1; justify-content:flex-end; }
+#mapTitle { width:min(100%,330px); background:rgba(255,255,255,.09); color:#fff; border:1px solid rgba(255,255,255,.18); border-radius:4px; padding:6px 9px; outline:none; }
+#mapTitle:focus { border-color:#f5b342; background:rgba(255,255,255,.14); }
+.unsaved-dot { width:8px; height:8px; border-radius:50%; background:#f6b93b; opacity:0; transition:.15s; }
+.unsaved-dot.show { opacity:1; }
+.toolbar { display:flex; align-items:center; gap:4px; padding:5px 8px; background:#e9edf1; border-bottom:1px solid #c9d0d7; z-index:15; overflow-x:auto; }
+.tool-sep { height:27px; width:1px; background:#c6ccd3; margin:0 4px; flex:0 0 auto; }
+.tool-btn { height:33px; min-width:34px; padding:0 9px; border:1px solid transparent; border-radius:4px; background:transparent; color:#27323d; display:flex; align-items:center; justify-content:center; gap:6px; white-space:nowrap; }
+.tool-btn:hover { border-color:#c5ccd3; background:#fff; }
+.tool-btn:active { background:#dce3ea; }
+.tool-btn:disabled { opacity:.4; cursor:not-allowed; }
+.tool-icon { font-size:17px; line-height:1; }
+.zoom-readout { min-width:53px; text-align:center; color:#46515d; font-size:12px; }
+.workspace { min-height:0; display:grid; grid-template-columns:220px minmax(280px,1fr) 304px; }
+.panel { background:var(--panel); min-height:0; overflow:hidden; z-index:8; }
+.left-panel { border-right:1px solid var(--panel-border); display:flex; flex-direction:column; }
+.right-panel { border-left:1px solid var(--panel-border); overflow-y:auto; }
+.panel-header { height:37px; flex:0 0 37px; display:flex; align-items:center; justify-content:space-between; padding:0 10px; background:#e4e8ec; border-bottom:1px solid var(--panel-border); font-weight:650; color:#34414d; }
+.panel-header button { border:0; background:transparent; color:#66717d; font-size:16px; }
+.navigator-wrap { height:185px; background:#fff; border-bottom:1px solid var(--panel-border); padding:6px; }
+#navigatorSvg { width:100%; height:100%; display:block; background:#f9fafb; border:1px solid #d5dbe1; cursor:crosshair; }
+.outline { flex:1; min-height:0; overflow:auto; padding:7px 3px 12px; }
+.outline-row { display:flex; align-items:center; min-height:27px; border-radius:4px; margin:1px 4px; padding-right:5px; user-select:none; white-space:nowrap; }
+.outline-row:hover { background:#e9edf2; }
+.outline-row.selected { background:#dceaf8; color:#174f84; }
+.outline-toggle { width:22px; border:0; background:transparent; padding:0; color:#68737e; }
+.outline-caption { overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
+.canvas-shell { position:relative; min-width:0; min-height:0; background-color:var(--canvas); background-image:radial-gradient(#cbd2d9 1px,transparent 1px); background-size:20px 20px; overflow:hidden; }
+#mapSvg { width:100%; height:100%; display:block; touch-action:none; cursor:grab; user-select:none; }
+#mapSvg.panning { cursor:grabbing; }
+.node { cursor:move; }
+.node .node-box { filter:drop-shadow(0 1px 1px rgba(0,0,0,.15)); }
+.node.selected .selection-ring { display:block; }
+.selection-ring { display:none; fill:none; stroke:var(--selection); stroke-width:2; stroke-dasharray:5 3; vector-effect:non-scaling-stroke; }
+.node text { pointer-events:none; }
+.node-image { pointer-events:none; }
+.node-badge { pointer-events:none; }
+.branch { fill:none; stroke-linecap:round; }
+.cross-connection { fill:none; cursor:pointer; opacity:.9; }
+.cross-connection:hover { stroke-width:4 !important; }
+.child-drag-control { cursor:crosshair; }
+.child-drag-control:hover circle { stroke-width:3.5; }
+.child-preview { fill:none; stroke:#e74c3c; stroke-width:2.5; stroke-dasharray:7 5; stroke-linecap:round; pointer-events:none; vector-effect:non-scaling-stroke; }
+#nodeEditor { position:absolute; z-index:30; resize:none; border:2px solid var(--selection); border-radius:6px; padding:7px 9px; outline:none; box-shadow:var(--shadow); min-width:120px; min-height:38px; overflow:hidden; }
+.canvas-hint { position:absolute; left:12px; bottom:12px; padding:6px 9px; border-radius:4px; background:rgba(255,255,255,.88); border:1px solid #ccd3da; color:#69747e; pointer-events:none; font-size:12px; }
+.search-box { position:absolute; top:12px; left:50%; transform:translateX(-50%); z-index:25; width:min(360px,75%); display:none; gap:5px; padding:6px; background:#fff; box-shadow:var(--shadow); border:1px solid #cbd2d9; border-radius:6px; }
+.search-box.show { display:flex; }
+.search-box input { flex:1; border:1px solid #bfc7cf; border-radius:4px; padding:7px; outline:none; }
+.search-box button { border:1px solid #c4cbd2; background:#f4f6f8; border-radius:4px; padding:0 9px; }
+.inspector-empty { padding:28px 20px; text-align:center; color:var(--muted); }
+.inspector-section { border-bottom:1px solid #d7dce1; }
+.inspector-title { width:100%; border:0; background:#edf0f3; padding:9px 11px; display:flex; align-items:center; justify-content:space-between; font-weight:650; color:#3e4a55; }
+.inspector-body { padding:10px 11px 12px; }
+.field { display:grid; grid-template-columns:95px minmax(0,1fr); align-items:center; gap:8px; margin-bottom:8px; }
+.field:last-child { margin-bottom:0; }
+.field label { color:#586570; font-size:12px; }
+.field input[type=text],.field input[type=number],.field select,.field textarea { width:100%; border:1px solid #bcc5ce; border-radius:4px; padding:5px 6px; background:#fff; min-width:0; }
+.field input[type=color] { width:38px; height:28px; border:1px solid #bcc5ce; border-radius:4px; padding:1px; background:#fff; }
+.field input[type=range] { width:100%; }
+.inline-controls { display:flex; gap:4px; flex-wrap:wrap; }
+.mini-btn { min-width:31px; height:29px; border:1px solid #bbc4cc; border-radius:4px; background:#fff; color:#303b45; }
+.mini-btn:hover,.mini-btn.active { background:#dce8f4; border-color:#8daac4; }
+.action-btn { width:100%; border:1px solid #b8c1ca; border-radius:4px; background:#fff; padding:7px 9px; color:#2e3a45; margin-top:6px; }
+.action-btn:hover { background:#edf2f6; }
+.action-btn.primary { background:#2574a9; color:#fff; border-color:#1d6393; }
+.action-btn.danger { color:#a52b22; }
+.meta-line { color:#6c7883; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.connection-row { display:flex; gap:5px; align-items:center; margin-top:5px; }
+.connection-row span { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
+.connection-row button { border:1px solid #d4b4b1; background:#fff; color:#a2342c; border-radius:3px; }
+.statusbar { display:flex; align-items:center; gap:18px; padding:0 10px; background:#dfe4e8; border-top:1px solid #c3cad1; color:#53606b; font-size:12px; z-index:15; }
+.statusbar .grow { flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.modal-backdrop { position:fixed; inset:0; z-index:500; display:flex; align-items:center; justify-content:center; background:rgba(15,22,29,.55); padding:18px; }
+.modal { width:min(680px,100%); max-height:min(720px,90vh); background:#fff; border-radius:8px; box-shadow:0 18px 55px rgba(0,0,0,.35); overflow:hidden; display:flex; flex-direction:column; }
+.modal.small { width:min(480px,100%); }
+.modal-header { display:flex; align-items:center; justify-content:space-between; padding:13px 16px; background:#edf0f3; border-bottom:1px solid #ccd2d8; }
+.modal-header h2 { margin:0; font-size:17px; }
+.modal-close { border:0; background:transparent; font-size:22px; color:#65717c; }
+.modal-body { padding:15px 16px; overflow:auto; }
+.modal-footer { padding:10px 16px; border-top:1px solid #d6dbe0; display:flex; justify-content:flex-end; gap:8px; }
+.modal-footer button,.modal-body .modal-button { border:1px solid #b9c2cb; border-radius:4px; padding:7px 12px; background:#fff; }
+.modal-footer button.primary,.modal-body .modal-button.primary { background:#2374a8; color:#fff; border-color:#1c6391; }
+.modal textarea { width:100%; min-height:180px; border:1px solid #b9c2ca; border-radius:5px; padding:8px; resize:vertical; }
+.share-link-row { display:flex; gap:7px; margin-top:7px; }
+.share-link-row input { flex:1; min-width:0; border:1px solid #b9c2ca; border-radius:4px; padding:8px; background:#f8fafb; }
+.share-link-row button { flex:0 0 auto; border:1px solid #1c6391; border-radius:4px; padding:7px 12px; background:#2374a8; color:#fff; }
+.share-note { color:#5d6974; font-size:13px; line-height:1.45; }
+.share-option { display:flex; align-items:flex-start; gap:9px; margin:13px 0 4px; padding:10px; border:1px solid #d4dae0; border-radius:5px; background:#f8fafb; }
+.share-option input { margin-top:3px; }
+.share-option label { font-weight:650; }
+.share-option small { display:block; margin-top:3px; color:#66727f; font-weight:400; line-height:1.4; }
+.share-status { min-height:20px; margin:9px 0 0; color:#5d6974; font-size:13px; }
+.share-status.error { color:#a52b22; }
+.project-list { display:flex; flex-direction:column; gap:7px; }
+.project-item { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:7px; align-items:center; padding:9px; border:1px solid #d1d7dd; border-radius:5px; }
+.project-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+.project-date { color:#6d7882; font-size:12px; }
+.project-item button { border:1px solid #bec6ce; background:#f8f9fa; border-radius:4px; padding:5px 8px; }
+.help-grid { display:grid; grid-template-columns:auto 1fr; gap:7px 14px; }
+.toast-stack { position:fixed; right:16px; bottom:42px; z-index:1000; display:flex; flex-direction:column; gap:8px; pointer-events:none; }
+.toast { min-width:240px; max-width:390px; background:#25313b; color:#fff; border-radius:5px; padding:10px 12px; box-shadow:var(--shadow); animation:toastIn .2s ease; }
+.toast.error { background:#9f332a; }
+.toast.success { background:#247444; }
+@keyframes toastIn { from { transform:translateY(8px); opacity:0; } }
+.context-menu { position:fixed; z-index:400; min-width:185px; padding:5px; background:#fff; border:1px solid #c7ced5; border-radius:5px; box-shadow:var(--shadow); }
+.context-menu button { width:100%; display:flex; justify-content:space-between; border:0; background:transparent; padding:7px 9px; border-radius:4px; }
+.context-menu button:hover { background:#edf1f5; }
+@media (max-width:1000px) {
+    .workspace { grid-template-columns:0 minmax(280px,1fr) 285px; }
+    .left-panel { visibility:hidden; }
+    .tool-label { display:none; }
+}
+@media (max-width:720px) {
+    .workspace { grid-template-columns:minmax(250px,1fr); }
+    .right-panel { position:absolute; right:0; top:90px; bottom:27px; width:285px; box-shadow:-3px 0 12px rgba(0,0,0,.2); transform:translateX(100%); transition:.2s; }
+    .right-panel.mobile-open { transform:translateX(0); }
+    .menu-strip { display:none; }
+    .title-wrap { min-width:100px; }
+}
+@media print {
+    .topbar,.toolbar,.left-panel,.right-panel,.statusbar,.canvas-hint,.search-box { display:none !important; }
+    .app,.workspace,.canvas-shell { display:block; width:100%; height:100%; background:#fff; }
+    #mapSvg { width:100vw; height:100vh; }
+}
+
+/* Unified resizable panels / view controls for all four Charter diagrams */
+.app{grid-template-rows:46px var(--charter-settings-height,44px) minmax(0,1fr) 27px!important}
+.toolbar{position:relative;overflow:auto;resize:none;min-height:33px;max-height:180px;align-content:start;flex-wrap:wrap}
+.charter-toolbar-grip{position:absolute;bottom:0;left:0;right:0;height:7px;cursor:ns-resize;background:linear-gradient(to bottom,transparent,#b3bbc7);z-index:10}
+#charterSettingsPanel{min-height:0!important;max-height:none!important;overflow:visible!important;align-content:flex-start}
+#charterSettingsPanel>.charter-toolbar-grip{position:absolute!important;top:auto!important;bottom:-4px!important;height:10px!important;touch-action:none;cursor:row-resize;z-index:90;background:linear-gradient(to bottom,transparent 20%,#8999a9 45%,#8999a9 55%,transparent 80%)}
+.charter-view-hidden{display:none!important}
+.charter-view-menu button{display:block;width:100%;text-align:left;padding:7px 10px;border:0;background:transparent;color:inherit;white-space:nowrap}
+.charter-view-menu button:hover{background:#e8edf3;color:#142333}
+.charter-settings-label{font-weight:650;white-space:nowrap;margin:3px 7px}
+.charter-panel-grip{position:absolute;top:0;bottom:0;width:7px;right:0;cursor:ew-resize;z-index:11}
+.charter-panel-grip.left-edge{left:0;right:auto}
+</style>
+</head>
+<body>
+<div class="app">
+    <header class="topbar">
+        <div class="brand"><span class="brand-mark"></span><span>Charter · Mind Map</span><label style="font-size:12px;margin-left:15px;color:#fff">Diagram
+<select aria-label="Diagram type" onchange="if(this.value!=='mindmap'){if(window.confirm('Open a new diagram? Unsaved changes may be lost.'))window.location.href='?new='+encodeURIComponent(this.value);else this.value='mindmap';}" style="padding:5px 8px;border-radius:4px"><option value="flowchart">Flowchart</option><option value="dfd">DFD</option><option value="erd">ERD</option><option value="mindmap" selected>MindCanvas · Mind map</option></select></label><a href="charter.php" style="font-size:12px;color:#fff;margin-left:15px;text-decoration:none;border:1px solid #68727d;padding:6px 9px;border-radius:5px">← All diagrams</a></div>
+        <nav class="menu-strip">
+            <div class="menu"><button type="button">File</button><div class="dropdown">
+                <button data-action="new">New <kbd>Ctrl+N</kbd></button>
+                <button data-action="template-gallery">Browse templates…</button>
+                <button data-action="open-file">Open JSON… <kbd>Ctrl+O</kbd></button>
+                <button data-action="open-linked">Open linked file…</button>
+                <button data-action="browser-projects">Browser projects…</button>
+                <button data-action="open-shared">Open shared map…</button><hr>
+                <button data-action="save-share">Share… <kbd>Ctrl+S</kbd></button>
+                <button data-action="save-linked">Save linked file</button>
+                <button data-action="download-json">Download JSON…</button>
+                <button data-action="save-browser">Save in browser</button>
+                <button data-action="save-template">Save as template…</button><hr>
+                <button data-action="export-svg">Export SVG…</button>
+                <button data-action="export-png">Export PNG…</button>
+                <button data-action="print">Print <kbd>Ctrl+P</kbd></button>
+            </div></div>
+            <div class="menu"><button type="button">Edit</button><div class="dropdown">
+                <button data-action="undo">Undo <kbd>Ctrl+Z</kbd></button>
+                <button data-action="redo">Redo <kbd>Ctrl+Y</kbd></button><hr>
+                <button data-action="copy">Copy branch <kbd>Ctrl+C</kbd></button>
+                <button data-action="cut">Cut branch <kbd>Ctrl+X</kbd></button>
+                <button data-action="paste">Paste branch <kbd>Ctrl+V</kbd></button><hr>
+                <button data-action="find">Find nodes <kbd>Ctrl+F</kbd></button>
+            </div></div>
+            <div class="menu"><button type="button">Node</button><div class="dropdown">
+                <button data-action="add-child">New child <kbd>Tab</kbd></button>
+                <button data-action="add-sibling">New sibling <kbd>Enter</kbd></button>
+                <button data-action="edit-node">Edit text <kbd>F2</kbd></button>
+                <button data-action="delete-node">Delete <kbd>Delete</kbd></button><hr>
+                <button data-action="fold">Fold/unfold branch</button>
+                <button data-action="add-url">Edit URLs <kbd>Ctrl+K</kbd></button>
+                <button data-action="edit-notes">Edit attachment/notes</button>
+                <button data-action="add-image">Add/change image</button>
+                <button data-action="connect">Connect to another node</button>
+            </div></div>
+            <div class="menu"><button type="button">View</button><div class="dropdown">
+                <button data-action="zoom-in">Zoom in</button>
+                <button data-action="zoom-out">Zoom out</button>
+                <button data-action="fit">Fit map</button>
+                <button data-action="centre-selected">Centre selected</button><hr>
+                <button data-action="auto-layout">Auto-layout map</button>
+                <button data-action="toggle-grid">Toggle grid</button>
+                <button data-action="toggle-inspector">Toggle inspector</button>
+<button type="button" data-charter-view="settings">✓ Diagram settings</button>
+<button type="button" data-charter-view="controls">✓ Navigator / Outline</button>
+<button type="button" data-charter-view="inspector">✓ Inspector</button>
+<button type="button" data-charter-view="canvas">✓ Canvas</button>
+<button type="button" data-charter-reset="all">Reset all panels</button>
+            </div></div>
+            <div class="menu"><button type="button">Help</button><div class="dropdown">
+                <button data-action="help">Keyboard shortcuts <kbd>F1</kbd></button>
+                <button data-action="about">About this app</button>
+            </div></div>
+        </nav>
+        <div class="title-wrap"><span id="unsavedDot" class="unsaved-dot" title="Unsaved changes"></span><input id="mapTitle" value="Central Idea" aria-label="Mind map title"></div>
+    </header>
+
+    <div class="toolbar" id="charterSettingsPanel">
+        <span class="charter-settings-label">Diagram:</span>
+        <select aria-label="Diagram type" onchange="if(this.value!=='mindmap'&&confirm('Open a new diagram? Unsaved changes may be lost.'))location.href='?new='+encodeURIComponent(this.value)">
+            <option value="mindmap" selected>Mind map</option><option value="flowchart">Flowchart</option><option value="dfd">DFD</option><option value="erd">ERD</option>
+        </select>
+        <span class="charter-settings-label">Layout: Mind map</span>
+        <span class="tool-sep"></span>
+        <button class="tool-btn" data-action="add-child" title="New child (Tab)"><span class="tool-icon">↳</span><span class="tool-label">Child</span></button>
+        <button class="tool-btn" data-action="add-sibling" title="New sibling (Enter)"><span class="tool-icon">⇥</span><span class="tool-label">Sibling</span></button>
+        <button class="tool-btn" data-action="edit-node" title="Edit selected node (F2)"><span class="tool-icon">✎</span></button>
+        <button class="tool-btn" data-action="delete-node" title="Delete selected node"><span class="tool-icon">⌫</span></button>
+        <span class="tool-sep"></span>
+        <button class="tool-btn" data-action="undo" title="Undo"><span class="tool-icon">↶</span></button>
+        <button class="tool-btn" data-action="redo" title="Redo"><span class="tool-icon">↷</span></button>
+        <button class="tool-btn" data-action="copy" title="Copy branch"><span class="tool-icon">⧉</span></button>
+        <button class="tool-btn" data-action="paste" title="Paste branch"><span class="tool-icon">▣</span></button>
+        <span class="tool-sep"></span>
+        <button class="tool-btn" data-action="fold" title="Fold/unfold branch"><span class="tool-icon">⊟</span></button>
+        <button class="tool-btn" data-action="connect" title="Connect nodes"><span class="tool-icon">⌁</span></button>
+        <button class="tool-btn" data-action="add-image" title="Add image"><span class="tool-icon">▧</span></button>
+        <button class="tool-btn" data-action="edit-notes" title="Attachment/notes"><span class="tool-icon">▤</span></button>
+        <button class="tool-btn" data-action="add-url" title="URLs"><span class="tool-icon">🔗</span></button>
+        <span class="tool-sep"></span>
+        <button class="tool-btn" data-action="zoom-out" title="Zoom out">−</button>
+        <span class="zoom-readout" id="zoomReadout">100%</span>
+        <button class="tool-btn" data-action="zoom-in" title="Zoom in">+</button>
+        <button class="tool-btn" data-action="fit" title="Fit map"><span class="tool-icon">⛶</span></button>
+        <button class="tool-btn" data-action="auto-layout" title="Automatically arrange nodes"><span class="tool-icon">⌘</span></button>
+        <span class="tool-sep"></span>
+        <button class="tool-btn" data-action="open-file" title="Open JSON"><span class="tool-icon">📂</span></button>
+        <button class="tool-btn" data-action="save-share" title="Share this map"><span class="tool-icon">☁</span><span class="tool-label">Share</span></button>
+        <button class="tool-btn" data-action="download-json" title="Download JSON"><span class="tool-icon">💾</span></button>
+        <button class="tool-btn" data-action="export-png" title="Export PNG"><span class="tool-icon">🖼</span></button>
+    </div>
+
+    <main class="workspace">
+        <aside class="panel left-panel">
+            <div class="panel-header"><span>Navigator</span><button data-action="fit" title="Fit map">⛶</button></div>
+            <div class="navigator-wrap"><svg id="navigatorSvg" aria-label="Map navigator"></svg></div>
+            <div class="panel-header"><span>Outline</span><button data-action="find" title="Find">⌕</button></div>
+            <div id="outline" class="outline"></div>
+        </aside>
+
+        <section id="canvasShell" class="canvas-shell">
+            <svg id="mapSvg" aria-label="Mind map canvas">
+                <defs>
+                    <marker id="arrowHead" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3.5 L0,7 z" fill="context-stroke"></path></marker>
+                </defs>
+                <g id="viewport"><g id="branches"></g><g id="crossConnections"></g><g id="nodes"></g></g>
+            </svg>
+            <textarea id="nodeEditor" class="hidden" aria-label="Edit node text"></textarea>
+            <div id="searchBox" class="search-box"><input id="searchInput" placeholder="Find a node…"><button id="searchPrev" title="Previous">↑</button><button id="searchNext" title="Next">↓</button><button id="searchClose" title="Close">×</button></div>
+            <div class="canvas-hint">Drag the background to pan · drag the connector dot to create a child · double-click a node to edit</div>
+        </section>
+
+        <aside id="rightPanel" class="panel right-panel">
+            <div class="panel-header"><span>Inspector</span><button data-action="toggle-inspector" title="Hide inspector">×</button></div>
+            <div id="inspector"><div class="inspector-empty">Select a node to edit its appearance and content.</div></div>
+        </aside>
+    </main>
+
+    <footer class="statusbar"><span id="statusMessage" class="grow">Ready</span><span id="nodeCount">1 node</span><span id="saveState">Browser autosave on</span></footer>
+</div>
+
+<input id="fileInput" type="file" accept="application/json,.json" class="hidden">
+<input id="imageInput" type="file" accept="image/*" class="hidden">
+<div id="modalRoot"></div>
+<div id="contextRoot"></div>
+<div id="toastStack" class="toast-stack"></div>
+
+<script>
+(() => {
+'use strict';
+
+const NS = 'http://www.w3.org/2000/svg';
+const PALETTE = ['#99cc00','#3366ff','#f39c12','#9b59b6','#e74c3c','#00a8a8','#d35400','#607d8b'];
+const INITIAL_SHARE_ID = <?php echo json_encode($initialShareId, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE); ?>;
+const INITIAL_NEW_SESSION_ID = <?php echo json_encode($initialNewSessionId, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE); ?>;
+const INITIAL_TEMPLATE_PROJECT = <?php echo json_encode($initialTemplateProject, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE); ?>;
+const INITIAL_TEMPLATE_ERROR = <?php echo json_encode($initialTemplateError, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE); ?>;
+const INITIAL_BLANK_REQUEST = <?php echo isset($_GET['new']) ? 'true' : 'false'; ?>;
+const DEFAULT_STYLE = {
+    font: {style:'normal', weight:'normal', decoration:'none', fontfamily:'sans-serif', size:15, color:'#000000', horizontalAlign:'center', verticalAlign:'middle'},
+    border: {visible:true, style:'dashed', color:'#ffa500', background:'#ffffff'},
+    lineWidthOffset:0,
+    lineType:'curved',
+    branchColor:'#607d8b'
+};
+
+const el = id => document.getElementById(id);
+const svg = el('mapSvg');
+const canvasShell = el('canvasShell');
+const viewport = el('viewport');
+const branchesLayer = el('branches');
+const crossLayer = el('crossConnections');
+const nodesLayer = el('nodes');
+const inspector = el('inspector');
+const outline = el('outline');
+const nodeEditor = el('nodeEditor');
+const fileInput = el('fileInput');
+const imageInput = el('imageInput');
+
+let project;
+let selectedId = null;
+let camera = {x:0, y:0, scale:1};
+let positions = new Map();
+let nodeMetrics = new Map();
+let nodeIndex = new Map();
+let parentIndex = new Map();
+let history = [];
+let future = [];
+let branchClipboard = null;
+let dirty = false;
+let dragState = null;
+let childCreateState = null;
+let panState = null;
+let linkedFileHandle = null;
+let serverShareId = null;
+let serverShareUrl = null;
+let connectionSource = null;
+let searchMatches = [];
+let searchPosition = -1;
+let autosaveTimer = null;
+let inspectorVisible = true;
+let gridVisible = true;
+let localProjectKey = null;
+let editingNodeId = null;
+
+function uuid() {
+    if (crypto && crypto.randomUUID) return crypto.randomUUID();
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        return (c === 'x' ? r : (r & 3 | 8)).toString(16);
+    });
+}
+
+function clone(value) {
+    return JSON.parse(JSON.stringify(value));
+}
+
+function now() { return Date.now(); }
+
+function createDefaultProject() {
+    const rootId = uuid();
+    const t = now();
+    return {
+        id: uuid(),
+        title: 'Central Idea',
+        mindmap: {root: {id:rootId, parentId:null, text:{caption:'Central Idea'}, children:[]}},
+        dates: {created:t, modified:t},
+        dimensions: {x:16000, y:8000},
+        autosave: false,
+        pluginData: {
+            style: {[rootId]: clone(DEFAULT_STYLE)},
+            layout: {[rootId]: {offset:{x:0,y:0}, foldChildren:false}},
+            image: {[rootId]: {}},
+            attachment: {[rootId]: {}},
+            url: {[rootId]: {}}
+        },
+        cnodes: []
+    };
+}
+
+function normaliseProject(data) {
+    if (!data || typeof data !== 'object' || !data.mindmap || !data.mindmap.root) {
+        throw new Error('This JSON file does not contain a valid mindmap.root object.');
+    }
+    data.id = data.id || uuid();
+    data.title = data.title || data.mindmap.root?.text?.caption || 'Mind map';
+    data.dates = data.dates || {created:now(), modified:now()};
+    data.dates.created = data.dates.created || now();
+    data.dates.modified = data.dates.modified || data.dates.created;
+    data.dimensions = data.dimensions || {x:16000,y:8000};
+    if (typeof data.autosave !== 'boolean') data.autosave = false;
+    data.pluginData = data.pluginData || {};
+    ['style','layout','image','attachment','url'].forEach(k => data.pluginData[k] = data.pluginData[k] || {});
+    data.cnodes = Array.isArray(data.cnodes) ? data.cnodes : [];
+
+    const seen = new Set();
+    function walk(node, parentId) {
+        if (!node.id || seen.has(node.id)) node.id = uuid();
+        seen.add(node.id);
+        node.parentId = parentId;
+        node.text = node.text || {};
+        node.text.caption = String(node.text.caption ?? 'New idea');
+        node.children = Array.isArray(node.children) ? node.children : [];
+        if (!data.pluginData.style[node.id]) {
+            const inherited = parentId && data.pluginData.style[parentId] ? clone(data.pluginData.style[parentId]) : clone(DEFAULT_STYLE);
+            inherited.font.weight = parentId ? 'normal' : 'bold';
+            inherited.font.size = parentId ? 15 : 20;
+            data.pluginData.style[node.id] = inherited;
+        } else {
+            data.pluginData.style[node.id] = mergeStyle(data.pluginData.style[node.id], parentId === null);
+        }
+        if (!data.pluginData.layout[node.id]) data.pluginData.layout[node.id] = {offset:{x:0,y:0}, foldChildren:false};
+        data.pluginData.layout[node.id].offset = data.pluginData.layout[node.id].offset || {x:0,y:0};
+        data.pluginData.layout[node.id].offset.x = Number(data.pluginData.layout[node.id].offset.x) || 0;
+        data.pluginData.layout[node.id].offset.y = Number(data.pluginData.layout[node.id].offset.y) || 0;
+        data.pluginData.layout[node.id].foldChildren = !!data.pluginData.layout[node.id].foldChildren;
+        if (!data.pluginData.image[node.id]) data.pluginData.image[node.id] = {};
+        if (!data.pluginData.attachment[node.id]) data.pluginData.attachment[node.id] = {};
+        if (!data.pluginData.url[node.id]) data.pluginData.url[node.id] = {};
+        node.children.forEach(child => walk(child, node.id));
+    }
+    walk(data.mindmap.root, null);
+    return data;
+}
+
+function mergeStyle(source, isRoot = false) {
+    const s = clone(DEFAULT_STYLE);
+    source = source || {};
+    Object.assign(s, source);
+    s.font = Object.assign({}, DEFAULT_STYLE.font, source.font || {});
+    s.border = Object.assign({}, DEFAULT_STYLE.border, source.border || {});
+    s.font.size = Number(s.font.size) || (isRoot ? 20 : 15);
+    s.font.horizontalAlign = ['left','center','right'].includes(s.font.horizontalAlign) ? s.font.horizontalAlign : 'center';
+    s.font.verticalAlign = ['top','middle','bottom'].includes(s.font.verticalAlign) ? s.font.verticalAlign : 'middle';
+    s.lineWidthOffset = Number.isFinite(Number(s.lineWidthOffset)) ? Number(s.lineWidthOffset) : 0;
+    s.lineType = ['curved','straight','orthogonal'].includes(s.lineType) ? s.lineType : 'curved';
+    return s;
+}
+
+function rebuildIndex() {
+    nodeIndex = new Map();
+    parentIndex = new Map();
+    function walk(node, parent) {
+        nodeIndex.set(node.id, node);
+        if (parent) parentIndex.set(node.id, parent);
+        node.children.forEach(child => walk(child, node));
+    }
+    walk(project.mindmap.root, null);
+    if (!selectedId || !nodeIndex.has(selectedId)) selectedId = project.mindmap.root.id;
+}
+
+function getNode(id = selectedId) { return nodeIndex.get(id) || null; }
+function getParent(id = selectedId) { return parentIndex.get(id) || null; }
+function getStyle(id) { return mergeStyle(project.pluginData.style[id], id === project.mindmap.root.id); }
+function getLayout(id) { return project.pluginData.layout[id] || {offset:{x:0,y:0},foldChildren:false}; }
+
+function getImageSource(entry) {
+    if (!entry || typeof entry !== 'object') return '';
+    return entry.data || entry.src || entry.url || entry.image || entry.imgData || '';
+}
+
+function getAttachmentText(entry) {
+    if (!entry || typeof entry !== 'object') return '';
+    return entry.text || entry.html || entry.content || '';
+}
+
+function setDirty(value = true) {
+    dirty = value;
+    el('unsavedDot').classList.toggle('show', dirty);
+    el('saveState').textContent = dirty ? 'Unsaved changes' : 'All changes saved';
+    if (value) {
+        project.dates.modified = now();
+        clearTimeout(autosaveTimer);
+        autosaveTimer = setTimeout(saveAutosave, 500);
+    }
+}
+
+function pushHistory() {
+    history.push({project:clone(project), selectedId});
+    if (history.length > 80) history.shift();
+    future = [];
+    updateToolbarState();
+}
+
+function restoreSnapshot(snapshot) {
+    project = normaliseProject(snapshot.project);
+    selectedId = snapshot.selectedId;
+    rebuildIndex();
+    renderAll();
+    syncTitle();
+    setDirty(true);
+}
+
+function undo() {
+    if (!history.length) return;
+    future.push({project:clone(project), selectedId});
+    restoreSnapshot(history.pop());
+}
+
+function redo() {
+    if (!future.length) return;
+    history.push({project:clone(project), selectedId});
+    restoreSnapshot(future.pop());
+}
+
+function setProject(data, options = {}) {
+    nodeEditor.classList.add('hidden');
+    editingNodeId = null;
+    project = normaliseProject(clone(data));
+    selectedId = project.mindmap.root.id;
+    history = [];
+    future = [];
+    serverShareId = options.serverShareId || null;
+    serverShareUrl = options.serverShareUrl || null;
+    linkedFileHandle = options.linkedFileHandle || null;
+    updateShareAddress(serverShareId);
+    localProjectKey = `mindcanvas.project.${project.id}`;
+    rebuildIndex();
+    syncTitle();
+    renderAll();
+    setDirty(false);
+    requestAnimationFrame(() => fitMap());
+    saveAutosave();
+}
+
+function syncTitle() {
+    el('mapTitle').value = project.title || 'Mind map';
+    document.title = `${project.title || 'Mind map'} – MindCanvas`;
+}
+
+function updateShareAddress(shareId) {
+    try {
+        const address = new URL(window.location.href);
+        address.search = '';
+        address.hash = '';
+        address.searchParams.set('mindmap','1');
+        if (shareId) address.searchParams.set('share', shareId);
+        else address.searchParams.set('edit', '1');
+        window.history.replaceState(null, '', address.pathname + address.search);
+    } catch (error) { /* The editor still works when history replacement is unavailable. */ }
+}
+
+function visibleNodes() {
+    const list = [];
+    function walk(node, parentPos) {
+        const layout = getLayout(node.id);
+        const pos = {
+            x: parentPos.x + Number(layout.offset.x || 0),
+            y: parentPos.y + Number(layout.offset.y || 0)
+        };
+        positions.set(node.id, pos);
+        list.push(node);
+        if (!layout.foldChildren) node.children.forEach(child => walk(child, pos));
+    }
+    positions = new Map();
+    walk(project.mindmap.root, {x:0,y:0});
+    return list;
+}
+
+function estimateMetrics(node, style) {
+    const lines = String(node.text.caption || '').split('\n');
+    const size = Number(style.font.size) || 15;
+    let maxChars = 1;
+    lines.forEach(line => maxChars = Math.max(maxChars, Array.from(line).length));
+    const imageSrc = getImageSource(project.pluginData.image[node.id]);
+    const badges = ((project.pluginData.url[node.id]?.urls || []).length ? 18 : 0) + (getAttachmentText(project.pluginData.attachment[node.id]) ? 18 : 0);
+    const textWidth = Math.min(360, Math.max(55, maxChars * size * .59));
+    const imageWidth = imageSrc ? 58 : 0;
+    return {
+        width: textWidth + imageWidth + badges + 30,
+        height: Math.max(imageSrc ? 65 : 34, lines.length * size * 1.28 + 18),
+        lines,
+        imageWidth,
+        badges
+    };
+}
+
+function createSvg(tag, attrs = {}) {
+    const node = document.createElementNS(NS, tag);
+    Object.entries(attrs).forEach(([key,value]) => {
+        if (value !== null && value !== undefined) node.setAttribute(key, String(value));
+    });
+    return node;
+}
+
+function renderAll() {
+    rebuildIndex();
+    renderMap();
+    renderOutline();
+    renderInspector();
+    renderNavigator();
+    updateStatus();
+    updateToolbarState();
+}
+
+function renderMap() {
+    branchesLayer.replaceChildren();
+    crossLayer.replaceChildren();
+    nodesLayer.replaceChildren();
+    nodeMetrics = new Map();
+    const list = visibleNodes();
+
+    list.forEach(node => {
+        const style = getStyle(node.id);
+        nodeMetrics.set(node.id, estimateMetrics(node, style));
+    });
+
+    list.forEach(node => {
+        const parent = parentIndex.get(node.id);
+        if (!parent || !positions.has(parent.id)) return;
+        const line = createBranch(parent.id, node.id);
+        if (line) branchesLayer.appendChild(line);
+    });
+
+    project.cnodes.forEach((connection, index) => {
+        if (!positions.has(connection.from) || !positions.has(connection.to)) return;
+        const path = createCrossConnection(connection, index);
+        crossLayer.appendChild(path);
+    });
+
+    list.forEach(node => nodesLayer.appendChild(createNodeGroup(node)));
+    applyCamera();
+}
+
+function connectionPoints(fromId, toId) {
+    const a = positions.get(fromId), b = positions.get(toId);
+    const am = nodeMetrics.get(fromId), bm = nodeMetrics.get(toId);
+    if (!a || !b || !am || !bm) return null;
+    const dx = b.x - a.x, dy = b.y - a.y;
+    let start, end;
+    if (Math.abs(dx) >= Math.abs(dy) * .55) {
+        const sign = dx >= 0 ? 1 : -1;
+        start = {x:a.x + sign * am.width/2, y:a.y};
+        end = {x:b.x - sign * bm.width/2, y:b.y};
+    } else {
+        const sign = dy >= 0 ? 1 : -1;
+        start = {x:a.x, y:a.y + sign * am.height/2};
+        end = {x:b.x, y:b.y - sign * bm.height/2};
+    }
+    return {start,end,dx,dy};
+}
+
+function curvedPath(points) {
+    const {start,end} = points;
+    const horizontal = Math.abs(end.x-start.x) >= Math.abs(end.y-start.y)*.55;
+    if (horizontal) {
+        const mx = (start.x + end.x) / 2;
+        return `M ${start.x} ${start.y} C ${mx} ${start.y}, ${mx} ${end.y}, ${end.x} ${end.y}`;
+    }
+    const my = (start.y + end.y) / 2;
+    return `M ${start.x} ${start.y} C ${start.x} ${my}, ${end.x} ${my}, ${end.x} ${end.y}`;
+}
+
+function branchPath(points, lineType = 'curved') {
+    const {start,end} = points;
+    if (lineType === 'straight') return `M ${start.x} ${start.y} L ${end.x} ${end.y}`;
+    if (lineType === 'orthogonal') {
+        const horizontal = Math.abs(end.x-start.x) >= Math.abs(end.y-start.y)*.55;
+        if (horizontal) {
+            const mx = (start.x + end.x) / 2;
+            return `M ${start.x} ${start.y} H ${mx} V ${end.y} H ${end.x}`;
+        }
+        const my = (start.y + end.y) / 2;
+        return `M ${start.x} ${start.y} V ${my} H ${end.x} V ${end.y}`;
+    }
+    return curvedPath(points);
+}
+
+function branchStrokeWidth(lineWidthOffset) {
+    const offset = Math.max(-2, Math.min(2, Math.round(Number(lineWidthOffset) || 0)));
+    return ({'-2':1.5, '-1':2.5, '0':4.5, '1':6.5, '2':9})[String(offset)];
+}
+
+function createBranch(parentId, childId) {
+    const points = connectionPoints(parentId, childId);
+    if (!points) return null;
+    const style = getStyle(childId);
+    const width = branchStrokeWidth(style.lineWidthOffset);
+    return createSvg('path', {
+        class:'branch', d:branchPath(points, style.lineType),
+        fill:'none', stroke:style.branchColor || '#607d8b',
+        'stroke-width':width, 'stroke-linecap':'round',
+        'stroke-linejoin':'round', 'vector-effect':'non-scaling-stroke'
+    });
+}
+
+function createCrossConnection(connection, index) {
+    const points = connectionPoints(connection.from, connection.to);
+    const p = createSvg('path', {
+        class:'cross-connection', d:curvedPath(points),
+        fill:'none', stroke:connection.color || '#e74c3c',
+        'stroke-width':2.4, 'stroke-linecap':'round',
+        'stroke-dasharray':connection.style === 'dashed' ? '7 5' : (connection.style === 'dotted' ? '2 5' : ''),
+        'vector-effect':'non-scaling-stroke', 'data-index':index,
+        'marker-end': String(connection.arrow) !== '0' ? 'url(#arrowHead)' : null
+    });
+    p.addEventListener('click', e => {
+        e.stopPropagation();
+        showConfirm('Remove connection?', 'Remove this cross-connection?', () => {
+            pushHistory(); project.cnodes.splice(index,1); setDirty(); renderAll();
+        });
+    });
+    return p;
+}
+
+function createNodeGroup(node) {
+    const pos = positions.get(node.id);
+    const style = getStyle(node.id);
+    const metric = nodeMetrics.get(node.id);
+    const isRoot = node.id === project.mindmap.root.id;
+    const group = createSvg('g', {class:`node${node.id === selectedId ? ' selected':''}`, transform:`translate(${pos.x} ${pos.y})`, 'data-id':node.id, tabindex:'0'});
+
+    const borderVisible = style.border.visible !== false && style.border.style !== 'none';
+    const box = createSvg('rect', {
+        class:'node-box', x:-metric.width/2, y:-metric.height/2, width:metric.width, height:metric.height,
+        rx:isRoot ? 13 : 7, fill:style.border.background || '#fff',
+        stroke:borderVisible ? (style.border.color || '#ffa500') : 'transparent',
+        'stroke-width':isRoot ? 2.2 : 1.5,
+        'stroke-dasharray':style.border.style === 'dashed' ? '7 4' : (style.border.style === 'dotted' ? '2 4' : ''),
+        'vector-effect':'non-scaling-stroke'
+    });
+    group.appendChild(box);
+    group.appendChild(createSvg('rect', {class:'selection-ring', x:-metric.width/2-5, y:-metric.height/2-5, width:metric.width+10, height:metric.height+10, rx:isRoot ? 16 : 10}));
+
+    let contentX = -metric.width/2 + 13;
+    const imageSrc = getImageSource(project.pluginData.image[node.id]);
+    if (imageSrc) {
+        const image = createSvg('image', {class:'node-image', href:imageSrc, x:contentX, y:-24, width:48, height:48, preserveAspectRatio:'xMidYMid meet'});
+        group.appendChild(image);
+        contentX += 58;
+    }
+
+    const textLeft = contentX;
+    const textRight = metric.width/2 - 13 - metric.badges;
+    const horizontalAlign = style.font.horizontalAlign || 'center';
+    const textAnchor = horizontalAlign === 'left' ? 'start' : (horizontalAlign === 'right' ? 'end' : 'middle');
+    const textX = horizontalAlign === 'left' ? textLeft : (horizontalAlign === 'right' ? textRight : (textLeft + textRight) / 2);
+    const lineHeight = style.font.size * 1.28;
+    const verticalAlign = style.font.verticalAlign || 'middle';
+    let firstLineY = -(metric.lines.length - 1) * lineHeight / 2;
+    if (verticalAlign === 'top') firstLineY = -metric.height/2 + 13 + style.font.size/2;
+    if (verticalAlign === 'bottom') firstLineY = metric.height/2 - 13 - style.font.size/2 - (metric.lines.length - 1) * lineHeight;
+
+    const text = createSvg('text', {
+        x:textX, y:firstLineY,
+        fill:style.font.color || '#000', 'font-family':style.font.fontfamily || 'sans-serif',
+        'font-size':style.font.size, 'font-weight':style.font.weight || 'normal',
+        'font-style':style.font.style || 'normal', 'text-anchor':textAnchor,
+        'text-decoration':style.font.decoration || 'none', 'dominant-baseline':'middle'
+    });
+    metric.lines.forEach((line,i) => {
+        const tspan = createSvg('tspan', {x:textX, dy:i===0 ? 0 : lineHeight});
+        tspan.textContent = line || ' ';
+        text.appendChild(tspan);
+    });
+    group.appendChild(text);
+
+    let badgeX = metric.width/2 - 11;
+    const urls = project.pluginData.url[node.id]?.urls || [];
+    if (urls.length) {
+        const badge = createSvg('text', {class:'node-badge', x:badgeX, y:-metric.height/2+14, 'font-size':12, 'text-anchor':'end'});
+        badge.textContent = '🔗'; group.appendChild(badge); badgeX -= 17;
+    }
+    if (getAttachmentText(project.pluginData.attachment[node.id])) {
+        const badge = createSvg('text', {class:'node-badge', x:badgeX, y:-metric.height/2+14, 'font-size':12, 'text-anchor':'end'});
+        badge.textContent = '▤'; group.appendChild(badge);
+    }
+
+    if (node.id === selectedId) {
+        const rootPos = positions.get(project.mindmap.root.id) || {x:0,y:0};
+        const side = isRoot || pos.x >= rootPos.x ? 1 : -1;
+        const edgeX = side * metric.width / 2;
+        const handleX = edgeX + side * 15;
+        const control = createSvg('g', {
+            class:'child-drag-control',
+            transform:`translate(${handleX} 0)`,
+            'data-side':side
+        });
+        const title = createSvg('title');
+        title.textContent = 'Drag from here to create a child node';
+        control.appendChild(title);
+        control.appendChild(createSvg('line', {
+            x1:-side*15, y1:0, x2:-side*7, y2:0,
+            stroke:style.branchColor || '#607d8b',
+            'stroke-width':2,
+            'vector-effect':'non-scaling-stroke'
+        }));
+        control.appendChild(createSvg('circle', {
+            r:7, fill:'#fff', stroke:'#e74c3c', 'stroke-width':2,
+            'vector-effect':'non-scaling-stroke'
+        }));
+        control.addEventListener('pointerdown', e => startChildCreation(e, node.id, side));
+        control.addEventListener('click', e => e.stopPropagation());
+        group.appendChild(control);
+    }
+
+    group.addEventListener('pointerdown', startNodeDrag);
+    group.addEventListener('dblclick', e => {e.stopPropagation(); selectNode(node.id); beginNodeEdit();});
+    group.addEventListener('click', e => {
+        e.stopPropagation();
+        if (connectionSource && connectionSource !== node.id) completeConnection(node.id);
+        else selectNode(node.id);
+    });
+    group.addEventListener('contextmenu', e => { e.preventDefault(); e.stopPropagation(); selectNode(node.id); showContextMenu(e.clientX,e.clientY); });
+    return group;
+}
+
+function applyCamera() {
+    viewport.setAttribute('transform', `translate(${camera.x} ${camera.y}) scale(${camera.scale})`);
+    el('zoomReadout').textContent = `${Math.round(camera.scale*100)}%`;
+}
+
+function screenToWorld(clientX, clientY) {
+    const rect = svg.getBoundingClientRect();
+    return {x:(clientX-rect.left-camera.x)/camera.scale, y:(clientY-rect.top-camera.y)/camera.scale};
+}
+
+function worldToScreen(x,y) {
+    const rect = svg.getBoundingClientRect();
+    return {x:rect.left + camera.x + x*camera.scale, y:rect.top + camera.y + y*camera.scale};
+}
+
+function childPreviewPath(start, end) {
+    const dx = end.x - start.x;
+    const direction = dx >= 0 ? 1 : -1;
+    const bend = Math.max(45, Math.abs(dx) * .45);
+    return `M ${start.x} ${start.y} C ${start.x + direction*bend} ${start.y}, ${end.x - direction*bend} ${end.y}, ${end.x} ${end.y}`;
+}
+
+function startChildCreation(e, parentId, side) {
+    if (e.button !== 0) return;
+
+    if (selectedId !== parentId) {
+        selectedId = parentId;
+        nodesLayer.querySelectorAll('.node').forEach(group => {
+            group.classList.toggle('selected', group.dataset.id === parentId);
+        });
+        renderOutline();
+        renderInspector();
+        updateStatus();
+    }
+
+    const parentPosition = positions.get(parentId);
+    const metric = nodeMetrics.get(parentId);
+    if (!parentPosition || !metric) return;
+
+    const start = {
+        x: parentPosition.x + side * metric.width / 2,
+        y: parentPosition.y
+    };
+    const current = screenToWorld(e.clientX, e.clientY);
+    const preview = createSvg('path', {
+        class:'child-preview',
+        d:childPreviewPath(start, current)
+    });
+    crossLayer.appendChild(preview);
+
+    childCreateState = {
+        parentId,
+        pointerId:e.pointerId,
+        start,
+        current,
+        preview,
+        moved:false
+    };
+
+    try { svg.setPointerCapture(e.pointerId); } catch (error) { /* optional */ }
+    e.preventDefault();
+    e.stopPropagation();
+}
+
+function selectNode(id, centre = false) {
+    if (!nodeIndex.has(id)) return;
+    if (!nodeEditor.classList.contains('hidden') && editingNodeId !== id) commitNodeEdit(false, false);
+    selectedId = id;
+    renderMap();
+    renderOutline();
+    renderInspector();
+    updateStatus();
+    if (centre) centreSelected();
+}
+
+function startNodeDrag(e) {
+    if (e.button !== 0) return;
+    const target = e.currentTarget;
+    const id = target.dataset.id;
+    if (!nodeEditor.classList.contains('hidden') && editingNodeId !== id) commitNodeEdit(false, false);
+
+    // Do not rebuild the SVG during pointerdown: replacing the target element
+    // before pointer capture causes browsers to reject the drag operation.
+    if (selectedId !== id) {
+        selectedId = id;
+        nodesLayer.querySelectorAll('.node').forEach(group => {
+            group.classList.toggle('selected', group.dataset.id === id);
+        });
+        renderOutline();
+        renderInspector();
+        updateStatus();
+    }
+
+    const world = screenToWorld(e.clientX,e.clientY);
+    const layout = getLayout(id);
+    pushHistory();
+    dragState = {id, startWorld:world, startOffset:{x:layout.offset.x,y:layout.offset.y}, moved:false};
+    try { target.setPointerCapture(e.pointerId); } catch (error) { /* pointer capture is optional */ }
+    e.preventDefault(); e.stopPropagation();
+}
+
+function movePointer(e) {
+    if (childCreateState) {
+        const world = screenToWorld(e.clientX,e.clientY);
+        const dx = world.x-childCreateState.start.x;
+        const dy = world.y-childCreateState.start.y;
+        childCreateState.current = world;
+        if (Math.sqrt(dx*dx+dy*dy) > 18) childCreateState.moved=true;
+        childCreateState.preview.setAttribute('d', childPreviewPath(childCreateState.start, world));
+        return;
+    }
+    if (dragState) {
+        const world = screenToWorld(e.clientX,e.clientY);
+        const dx = world.x-dragState.startWorld.x, dy=world.y-dragState.startWorld.y;
+        if (Math.abs(dx)+Math.abs(dy) > .5) dragState.moved=true;
+        const layout = getLayout(dragState.id);
+        layout.offset.x = dragState.startOffset.x + dx;
+        layout.offset.y = dragState.startOffset.y + dy;
+        setDirty(); renderMap(); renderNavigator();
+        return;
+    }
+    if (panState) {
+        camera.x = panState.startCamera.x + e.clientX-panState.clientX;
+        camera.y = panState.startCamera.y + e.clientY-panState.clientY;
+        applyCamera(); renderNavigator();
+    }
+}
+
+function endPointer(e, cancelled = false) {
+    if (childCreateState) {
+        const state = childCreateState;
+        childCreateState = null;
+        if (state.preview && state.preview.parentNode) state.preview.remove();
+        if (!cancelled && state.moved) addChildAt(state.parentId, state.current);
+        return;
+    }
+    if (dragState) {
+        const moved = dragState.moved;
+        if (!moved) history.pop();
+        dragState = null;
+        // Leave an unmoved node in place until the subsequent click event.
+        // Rebuilding here would remove the clicked SVG element and suppress click.
+        if (moved) renderAll();
+    }
+    if (panState) {
+        panState = null; svg.classList.remove('panning');
+    }
+}
+
+svg.addEventListener('pointerdown', e => {
+    if (e.button !== 0 || e.target.closest('.node')) return;
+    panState = {clientX:e.clientX, clientY:e.clientY, startCamera:{x:camera.x,y:camera.y}};
+    svg.setPointerCapture(e.pointerId); svg.classList.add('panning');
+    closeMenus(); closeContextMenu();
+});
+svg.addEventListener('pointermove', movePointer);
+svg.addEventListener('pointerup', e => endPointer(e, false));
+svg.addEventListener('pointercancel', e => endPointer(e, true));
+svg.addEventListener('click', e => { if (e.target === svg || e.target === viewport) closeContextMenu(); });
+svg.addEventListener('wheel', e => {
+    e.preventDefault();
+    const rect = svg.getBoundingClientRect();
+    const sx=e.clientX-rect.left, sy=e.clientY-rect.top;
+    const wx=(sx-camera.x)/camera.scale, wy=(sy-camera.y)/camera.scale;
+    const factor = e.deltaY < 0 ? 1.12 : .89;
+    const next = Math.min(3,Math.max(.2,camera.scale*factor));
+    camera.x = sx-wx*next; camera.y = sy-wy*next; camera.scale=next;
+    applyCamera(); renderNavigator();
+},{passive:false});
+
+function mapBounds(includePadding = true) {
+    const list = visibleNodes();
+    if (!list.length) return {minX:-100,minY:-100,maxX:100,maxY:100,width:200,height:200};
+    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+    list.forEach(node => {
+        const p=positions.get(node.id), m=nodeMetrics.get(node.id) || estimateMetrics(node,getStyle(node.id));
+        minX=Math.min(minX,p.x-m.width/2); maxX=Math.max(maxX,p.x+m.width/2);
+        minY=Math.min(minY,p.y-m.height/2); maxY=Math.max(maxY,p.y+m.height/2);
+    });
+    const pad=includePadding?60:0; minX-=pad;minY-=pad;maxX+=pad;maxY+=pad;
+    return {minX,minY,maxX,maxY,width:maxX-minX,height:maxY-minY};
+}
+
+function fitMap() {
+    renderMap();
+    const bounds=mapBounds(); const rect=svg.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    camera.scale=Math.min(1.5,Math.max(.2,Math.min(rect.width/bounds.width,rect.height/bounds.height)));
+    camera.x=rect.width/2-(bounds.minX+bounds.width/2)*camera.scale;
+    camera.y=rect.height/2-(bounds.minY+bounds.height/2)*camera.scale;
+    applyCamera(); renderNavigator();
+}
+
+function zoomBy(factor) {
+    const rect=svg.getBoundingClientRect(), sx=rect.width/2, sy=rect.height/2;
+    const wx=(sx-camera.x)/camera.scale, wy=(sy-camera.y)/camera.scale;
+    camera.scale=Math.min(3,Math.max(.2,camera.scale*factor));
+    camera.x=sx-wx*camera.scale; camera.y=sy-wy*camera.scale;
+    applyCamera(); renderNavigator();
+}
+
+function centreSelected() {
+    const p=positions.get(selectedId); if (!p) return;
+    const rect=svg.getBoundingClientRect();
+    camera.x=rect.width/2-p.x*camera.scale; camera.y=rect.height/2-p.y*camera.scale;
+    applyCamera(); renderNavigator();
+}
+
+function renderNavigator() {
+    const nav=el('navigatorSvg'); nav.replaceChildren();
+    const list=visibleNodes();
+    if (!list.length) return;
+    const b=mapBounds(); const w=nav.clientWidth||200,h=nav.clientHeight||170;
+    const scale=Math.min(w/b.width,h/b.height)*.92;
+    const ox=(w-b.width*scale)/2-b.minX*scale, oy=(h-b.height*scale)/2-b.minY*scale;
+    list.forEach(node => {
+        const parent=parentIndex.get(node.id); if(!parent||!positions.has(parent.id))return;
+        const a=positions.get(parent.id),c=positions.get(node.id);
+        nav.appendChild(createSvg('line',{x1:a.x*scale+ox,y1:a.y*scale+oy,x2:c.x*scale+ox,y2:c.y*scale+oy,stroke:getStyle(node.id).branchColor,'stroke-width':1}));
+    });
+    list.forEach(node=>{
+        const p=positions.get(node.id),m=nodeMetrics.get(node.id)||{width:80,height:30};
+        nav.appendChild(createSvg('rect',{x:(p.x-m.width/2)*scale+ox,y:(p.y-m.height/2)*scale+oy,width:Math.max(3,m.width*scale),height:Math.max(2,m.height*scale),rx:1,fill:node.id===selectedId?'#e74c3c':getStyle(node.id).border.background,stroke:getStyle(node.id).branchColor,'stroke-width':.8}));
+    });
+    const rect=svg.getBoundingClientRect();
+    const worldLeft=-camera.x/camera.scale,worldTop=-camera.y/camera.scale;
+    nav.appendChild(createSvg('rect',{x:worldLeft*scale+ox,y:worldTop*scale+oy,width:rect.width/camera.scale*scale,height:rect.height/camera.scale*scale,fill:'rgba(231,76,60,.07)',stroke:'#e74c3c','stroke-width':1.2}));
+    nav.dataset.scale=scale;nav.dataset.ox=ox;nav.dataset.oy=oy;
+}
+
+el('navigatorSvg').addEventListener('pointerdown',e=>{
+    const nav=e.currentTarget,r=nav.getBoundingClientRect();
+    const scale=Number(nav.dataset.scale)||1,ox=Number(nav.dataset.ox)||0,oy=Number(nav.dataset.oy)||0;
+    const x=(e.clientX-r.left-ox)/scale,y=(e.clientY-r.top-oy)/scale;
+    const sr=svg.getBoundingClientRect(); camera.x=sr.width/2-x*camera.scale;camera.y=sr.height/2-y*camera.scale;
+    applyCamera();renderNavigator();
+});
+
+function renderOutline() {
+    outline.replaceChildren();
+    function walk(node,depth,hidden) {
+        if(hidden)return;
+        const row=document.createElement('div');row.className=`outline-row${node.id===selectedId?' selected':''}`;row.style.paddingLeft=`${depth*15}px`;
+        const toggle=document.createElement('button');toggle.className='outline-toggle';
+        if(node.children.length){toggle.textContent=getLayout(node.id).foldChildren?'▸':'▾';toggle.onclick=e=>{e.stopPropagation();selectNode(node.id);toggleFold();};}
+        else toggle.textContent='';
+        const caption=document.createElement('span');caption.className='outline-caption';caption.textContent=node.text.caption.replace(/\n/g,' ');caption.title=node.text.caption;
+        row.append(toggle,caption);row.onclick=()=>selectNode(node.id,true);row.ondblclick=()=>{selectNode(node.id);beginNodeEdit();};outline.appendChild(row);
+        if(!getLayout(node.id).foldChildren)node.children.forEach(child=>walk(child,depth+1,false));
+    }
+    walk(project.mindmap.root,0,false);
+}
+
+function renderInspector() {
+    const node=getNode();
+    if(!node){inspector.innerHTML='<div class="inspector-empty">Select a node to edit it.</div>';return;}
+    const style=getStyle(node.id),layout=getLayout(node.id),imageSrc=getImageSource(project.pluginData.image[node.id]);
+    const urls=project.pluginData.url[node.id]?.urls||[];
+    const notes=getAttachmentText(project.pluginData.attachment[node.id]);
+    const related=project.cnodes.map((c,i)=>({c,i})).filter(x=>x.c.from===node.id||x.c.to===node.id);
+    inspector.innerHTML=`
+    <section class="inspector-section"><button class="inspector-title">Node <span>⌄</span></button><div class="inspector-body">
+        <div class="field"><label>Text</label><input id="insText" type="text" value="${escapeAttr(node.text.caption.replace(/\n/g,' ↵ '))}"></div>
+        <div class="field"><label>ID</label><div class="meta-line" title="${node.id}">${node.id}</div></div>
+        <button class="action-btn" id="insEditText">Edit multiline text…</button>
+    </div></section>
+    <section class="inspector-section"><button class="inspector-title">Font <span>⌄</span></button><div class="inspector-body">
+        <div class="field"><label>Typeface</label><select id="insFont"><option value="sans-serif">Sans serif</option><option value="serif">Serif</option><option value="monospace">Monospace</option><option value="cursive">Cursive</option><option value="Arial">Arial</option><option value="Georgia">Georgia</option></select></div>
+        <div class="field"><label>Size</label><input id="insSize" type="number" min="8" max="72" value="${style.font.size}"></div>
+        <div class="field"><label>Style</label><div class="inline-controls"><button id="insBold" class="mini-btn ${style.font.weight==='bold'?'active':''}"><b>B</b></button><button id="insItalic" class="mini-btn ${style.font.style==='italic'?'active':''}"><i>I</i></button><button id="insUnderline" class="mini-btn ${String(style.font.decoration).includes('underline')?'active':''}"><u>U</u></button><button id="insStrike" class="mini-btn ${String(style.font.decoration).includes('line-through')?'active':''}"><s>S</s></button></div></div>
+        <div class="field"><label>Horizontal</label><select id="insHorizontalAlign"><option value="left">Left</option><option value="center">Centre</option><option value="right">Right</option></select></div>
+        <div class="field"><label>Vertical</label><select id="insVerticalAlign"><option value="top">Top</option><option value="middle">Centre</option><option value="bottom">Bottom</option></select></div>
+        <div class="field"><label>Font colour</label><input id="insFontColor" type="color" value="${safeColour(style.font.color,'#000000')}"></div>
+    </div></section>
+    <section class="inspector-section"><button class="inspector-title">Node and branch <span>⌄</span></button><div class="inspector-body">
+        <div class="field"><label>Background</label><input id="insBg" type="color" value="${safeColour(style.border.background,'#ffffff')}"></div>
+        <div class="field"><label>Border colour</label><input id="insBorderColor" type="color" value="${safeColour(style.border.color,'#ffa500')}"></div>
+        <div class="field"><label>Border style</label><select id="insBorderStyle"><option value="solid">Solid</option><option value="dashed">Dashed</option><option value="dotted">Dotted</option><option value="none">Hidden</option></select></div>
+        <div class="field"><label>Branch colour</label><input id="insBranchColor" type="color" value="${safeColour(style.branchColor,'#607d8b')}"></div>
+        <div class="field"><label>Line shape</label><select id="insLineType"><option value="curved">Curved</option><option value="straight">Straight</option><option value="orthogonal">90-degree</option></select></div>
+        <div class="field"><label>Line width</label><input id="insLineWidth" type="range" min="-2" max="2" step="1" value="${Math.max(-2,Math.min(2,Number(style.lineWidthOffset)||0))}"></div>
+        <div class="field"><label>Children</label><button id="insFold" class="mini-btn">${layout.foldChildren?'Unfold':'Fold'}</button></div>
+        <button class="action-btn" id="insConnect">${connectionSource===node.id?'Click another node…':'Connect to another node'}</button>
+        ${related.map(x=>`<div class="connection-row"><span>Connection to ${escapeHtml(getNode(x.c.from===node.id?x.c.to:x.c.from)?.text.caption||'node')}</span><button data-remove-connection="${x.i}">×</button></div>`).join('')}
+    </div></section>
+    <section class="inspector-section"><button class="inspector-title">Content <span>⌄</span></button><div class="inspector-body">
+        <button class="action-btn" id="insUrls">URLs${urls.length?` (${urls.length})`:''}</button>
+        <button class="action-btn" id="insNotes">Attachment / notes${notes?' ✓':''}</button>
+        <button class="action-btn" id="insImage">${imageSrc?'Change image':'Add image'}</button>
+        ${imageSrc?'<button class="action-btn danger" id="insRemoveImage">Remove image</button>':''}
+    </div></section>`;
+    el('insFont').value=style.font.fontfamily;
+    el('insHorizontalAlign').value=style.font.horizontalAlign || 'center';
+    el('insVerticalAlign').value=style.font.verticalAlign || 'middle';
+    el('insBorderStyle').value=style.border.visible===false?'none':style.border.style;
+    el('insLineType').value=style.lineType || 'curved';
+    bindInspectorEvents();
+}
+
+function escapeHtml(value){return String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
+function escapeAttr(value){return escapeHtml(value);}
+function safeColour(value,fallback){return /^#[0-9a-f]{6}$/i.test(value||'')?value:fallback;}
+
+function inspectorChange(mutator, styleObject) {
+    pushHistory();
+    mutator();
+    project.pluginData.style[selectedId] = clone(styleObject);
+    setDirty();
+    renderAll();
+}
+
+function bindInspectorEvents() {
+    const style=getStyle(selectedId);
+    el('insText').addEventListener('change',e=>{pushHistory();getNode().text.caption=e.target.value.replace(/ ↵ /g,'\n');setDirty();renderAll();});
+    el('insEditText').onclick=beginNodeEdit;
+    el('insFont').onchange=e=>inspectorChange(()=>style.font.fontfamily=e.target.value,style);
+    el('insSize').onchange=e=>inspectorChange(()=>style.font.size=Math.min(72,Math.max(8,Number(e.target.value)||15)),style);
+    el('insBold').onclick=()=>inspectorChange(()=>style.font.weight=style.font.weight==='bold'?'normal':'bold',style);
+    el('insItalic').onclick=()=>inspectorChange(()=>style.font.style=style.font.style==='italic'?'normal':'italic',style);
+    el('insUnderline').onclick=()=>inspectorChange(()=>style.font.decoration=toggleDecoration(style.font.decoration,'underline'),style);
+    el('insStrike').onclick=()=>inspectorChange(()=>style.font.decoration=toggleDecoration(style.font.decoration,'line-through'),style);
+    el('insHorizontalAlign').onchange=e=>inspectorChange(()=>style.font.horizontalAlign=e.target.value,style);
+    el('insVerticalAlign').onchange=e=>inspectorChange(()=>style.font.verticalAlign=e.target.value,style);
+    el('insFontColor').onchange=e=>inspectorChange(()=>style.font.color=e.target.value,style);
+    el('insBg').onchange=e=>inspectorChange(()=>style.border.background=e.target.value,style);
+    el('insBorderColor').onchange=e=>inspectorChange(()=>style.border.color=e.target.value,style);
+    el('insBorderStyle').onchange=e=>inspectorChange(()=>{style.border.style=e.target.value==='none'?'solid':e.target.value;style.border.visible=e.target.value!=='none';},style);
+    el('insBranchColor').onchange=e=>inspectorChange(()=>style.branchColor=e.target.value,style);
+    el('insLineType').onchange=e=>inspectorChange(()=>style.lineType=e.target.value,style);
+    el('insLineWidth').onchange=e=>inspectorChange(()=>style.lineWidthOffset=Number(e.target.value),style);
+    el('insFold').onclick=toggleFold;el('insConnect').onclick=startConnection;
+    el('insUrls').onclick=editUrls;el('insNotes').onclick=editNotes;el('insImage').onclick=()=>imageInput.click();
+    if(el('insRemoveImage'))el('insRemoveImage').onclick=removeImage;
+    inspector.querySelectorAll('[data-remove-connection]').forEach(b=>b.onclick=()=>{pushHistory();project.cnodes.splice(Number(b.dataset.removeConnection),1);setDirty();renderAll();});
+}
+
+function toggleDecoration(current,token){const parts=String(current||'none').split(/\s+/).filter(x=>x&&x!=='none');const i=parts.indexOf(token);if(i>=0)parts.splice(i,1);else parts.push(token);return parts.length?parts.join(' '):'none';}
+
+function updateStatus() {
+    const node=getNode();el('statusMessage').textContent=connectionSource?'Select another node to complete the connection.':(node?`Selected: ${node.text.caption.replace(/\n/g,' / ')}`:'Ready');
+    const count=nodeIndex.size;el('nodeCount').textContent=`${count} node${count===1?'':'s'}`;
+}
+
+function updateToolbarState() {
+    document.querySelectorAll('[data-action="undo"]').forEach(b=>b.disabled=!history.length);
+    document.querySelectorAll('[data-action="redo"]').forEach(b=>b.disabled=!future.length);
+    document.querySelectorAll('[data-action="paste"]').forEach(b=>b.disabled=!branchClipboard);
+}
+
+function createChildNode(parent, offset) {
+    pushHistory();
+    const id=uuid(), child={id,parentId:parent.id,text:{caption:'New idea'},children:[]};
+    parent.children.push(child);
+
+    const parentStyle=getStyle(parent.id);
+    let branchColor=parentStyle.branchColor;
+    if(parent.id===project.mindmap.root.id){
+        branchColor=PALETTE[(parent.children.length-1)%PALETTE.length];
+    }
+
+    const childStyle=clone(parentStyle);
+    childStyle.font.weight='normal';
+    childStyle.font.size=Math.min(18,Number(childStyle.font.size)||15);
+    childStyle.branchColor=branchColor;
+
+    project.pluginData.style[id]=childStyle;
+    project.pluginData.layout[id]={offset:{x:offset.x,y:offset.y},foldChildren:false};
+    project.pluginData.image[id]={};
+    project.pluginData.attachment[id]={};
+    project.pluginData.url[id]={};
+    selectedId=id;
+    setDirty();
+    renderAll();
+    requestAnimationFrame(beginNodeEdit);
+}
+
+function addChildAt(parentId, worldPoint) {
+    const parent=nodeIndex.get(parentId);
+    const parentPosition=positions.get(parentId);
+    if(!parent||!parentPosition)return;
+
+    let x=worldPoint.x-parentPosition.x;
+    let y=worldPoint.y-parentPosition.y;
+    if(Math.abs(x)<110)x=x<0?-180:180;
+    createChildNode(parent,{x,y});
+}
+
+function addChild() {
+    const parent=getNode();if(!parent)return;
+    let x=200,y=parent.children.length*80;
+    if(parent.id===project.mindmap.root.id){
+        const idx=parent.children.length;
+        const rightCount=parent.children.filter(n=>getLayout(n.id).offset.x>=0).length;
+        const leftCount=idx-rightCount;
+        const right=rightCount<=leftCount;
+        x=right?220:-220;
+        y=(right?rightCount:leftCount)*105-(Math.floor(idx/2)*25);
+    } else {
+        const pp=positions.get(parent.id)||{x:0};
+        const root=positions.get(project.mindmap.root.id)||{x:0};
+        x=pp.x>=root.x?200:-200;
+        y=parent.children.length*75;
+    }
+    createChildNode(parent,{x,y});
+}
+
+function addSibling() {
+    const current=getNode(),parent=getParent();if(!current||!parent){addChild();return;}
+    pushHistory();const id=uuid(),index=parent.children.findIndex(n=>n.id===current.id);const sibling={id,parentId:parent.id,text:{caption:'New idea'},children:[]};parent.children.splice(index+1,0,sibling);
+    const layout=getLayout(current.id);project.pluginData.layout[id]={offset:{x:layout.offset.x,y:layout.offset.y+75},foldChildren:false};
+    project.pluginData.style[id]=clone(getStyle(current.id));project.pluginData.image[id]={};project.pluginData.attachment[id]={};project.pluginData.url[id]={};
+    selectedId=id;setDirty();renderAll();requestAnimationFrame(beginNodeEdit);
+}
+
+function deleteSelected() {
+    if(!nodeEditor.classList.contains('hidden'))commitNodeEdit(false,false);
+    const node=getNode(),parent=getParent();if(!node||!parent){toast('The central idea cannot be deleted.','error');return;}
+    pushHistory();const ids=[];(function collect(n){ids.push(n.id);n.children.forEach(collect);})(node);
+    parent.children=parent.children.filter(n=>n.id!==node.id);ids.forEach(id=>['style','layout','image','attachment','url','draw'].forEach(k=>{if(project.pluginData[k])delete project.pluginData[k][id];}));
+    project.cnodes=project.cnodes.filter(c=>!ids.includes(c.from)&&!ids.includes(c.to));selectedId=parent.id;setDirty();renderAll();
+}
+
+function toggleFold() {const node=getNode();if(!node||!node.children.length)return;pushHistory();getLayout(node.id).foldChildren=!getLayout(node.id).foldChildren;setDirty();renderAll();}
+
+function beginNodeEdit() {
+    if(!nodeEditor.classList.contains('hidden')){
+        if(editingNodeId===selectedId){nodeEditor.focus();nodeEditor.select();return;}
+        commitNodeEdit(false,false);
+    }
+    const node=getNode(),p=positions.get(selectedId),m=nodeMetrics.get(selectedId);if(!node||!p||!m)return;
+    editingNodeId=selectedId;
+    const screen=worldToScreen(p.x,p.y);const rect=canvasShell.getBoundingClientRect();
+    nodeEditor.value=node.text.caption;nodeEditor.style.left=`${screen.x-rect.left-m.width*camera.scale/2}px`;nodeEditor.style.top=`${screen.y-rect.top-m.height*camera.scale/2}px`;nodeEditor.style.width=`${Math.max(140,m.width*camera.scale)}px`;nodeEditor.style.height=`${Math.max(44,m.height*camera.scale)}px`;nodeEditor.classList.remove('hidden');nodeEditor.focus();nodeEditor.select();
+}
+
+function commitNodeEdit(cancel=false, rerender=true) {
+    if(nodeEditor.classList.contains('hidden'))return;
+    const editedNode=editingNodeId?nodeIndex.get(editingNodeId):null;
+    const value=nodeEditor.value.trim()||'New idea';
+    nodeEditor.classList.add('hidden');
+    editingNodeId=null;
+    if(!cancel&&editedNode&&value!==editedNode.text.caption){pushHistory();editedNode.text.caption=value;setDirty();}
+    if(rerender)renderAll();
+}
+nodeEditor.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();commitNodeEdit(true);}else if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();commitNodeEdit(false);}});
+nodeEditor.addEventListener('blur',()=>commitNodeEdit(false));
+
+function copyBranch(cut=false) {const node=getNode();if(!node)return;branchClipboard={tree:clone(node),sourceId:node.id,cut};toast(cut?'Branch cut. Select a destination and paste.':'Branch copied.');if(cut&&node.id===project.mindmap.root.id)branchClipboard.cut=false;updateToolbarState();}
+
+function pasteBranch() {
+    if(!branchClipboard)return;const target=getNode();if(!target)return;pushHistory();
+    const oldIds=[];function collect(n){oldIds.push(n.id);n.children.forEach(collect);}collect(branchClipboard.tree);
+    const idMap=new Map();oldIds.forEach(id=>idMap.set(id,uuid()));
+    function remap(n,parentId){const old=n.id;n.id=idMap.get(old);n.parentId=parentId;n.children.forEach(c=>remap(c,n.id));return n;}
+    const tree=remap(clone(branchClipboard.tree),target.id);target.children.push(tree);
+    oldIds.forEach(old=>{const id=idMap.get(old);['style','layout','image','attachment','url','draw'].forEach(k=>{if(project.pluginData[k]&&project.pluginData[k][old])project.pluginData[k][id]=clone(project.pluginData[k][old]);});if(!project.pluginData.layout[id])project.pluginData.layout[id]={offset:{x:200,y:0},foldChildren:false};});
+    project.pluginData.layout[tree.id].offset={x:(positions.get(target.id)?.x||0)>=0?200:-200,y:target.children.length*55};
+    if(branchClipboard.cut){const original=nodeIndex.get(branchClipboard.sourceId),oldParent=parentIndex.get(branchClipboard.sourceId);if(original&&oldParent&&!oldIds.includes(target.id)){oldParent.children=oldParent.children.filter(n=>n.id!==original.id);oldIds.forEach(id=>['style','layout','image','attachment','url','draw'].forEach(k=>{if(project.pluginData[k])delete project.pluginData[k][id];}));}branchClipboard=null;}
+    selectedId=tree.id;setDirty();renderAll();
+}
+
+function autoLayout() {
+    pushHistory();const root=project.mindmap.root;getLayout(root.id).offset={x:0,y:0};
+    const left=[],right=[];root.children.forEach((c,i)=>(i%2===0?right:left).push(c));
+    function branchHeight(node){if(!node.children.length)return 1;return Math.max(1,node.children.reduce((s,c)=>s+branchHeight(c),0));}
+    function arrangeChildren(node,direction){const children=node.children;if(!children.length)return;const heights=children.map(branchHeight),total=heights.reduce((a,b)=>a+b,0)*70;let cursor=-total/2;children.forEach((child,i)=>{const h=heights[i]*70;getLayout(child.id).offset={x:direction*210,y:cursor+h/2};cursor+=h;arrangeChildren(child,direction);});}
+    function placeRootSide(items,direction){const heights=items.map(branchHeight),total=heights.reduce((a,b)=>a+b,0)*85;let cursor=-total/2;items.forEach((child,i)=>{const h=heights[i]*85;getLayout(child.id).offset={x:direction*235,y:cursor+h/2};cursor+=h;arrangeChildren(child,direction);});}
+    placeRootSide(left,-1);placeRootSide(right,1);setDirty();renderAll();requestAnimationFrame(fitMap);
+}
+
+function startConnection() {if(!selectedId)return;connectionSource=selectedId;toast('Select another node to create the connection.');renderAll();}
+function completeConnection(targetId){if(!connectionSource||connectionSource===targetId)return;const exists=project.cnodes.some(c=>(c.from===connectionSource&&c.to===targetId)||(c.from===targetId&&c.to===connectionSource));if(!exists){pushHistory();project.cnodes.push({from:connectionSource,to:targetId,canvasId:now(),style:'dashed',color:'#e74c3c',arrow:'0'});setDirty();}connectionSource=null;selectedId=targetId;renderAll();}
+
+function editUrls() {
+    const current=(project.pluginData.url[selectedId]?.urls||[]).join('\n');
+    showTextModal('URLs','Enter one URL per line.',current,value=>{pushHistory();const urls=value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);project.pluginData.url[selectedId]={...(project.pluginData.url[selectedId]||{}),urls};setDirty();renderAll();});
+}
+function editNotes() {const current=getAttachmentText(project.pluginData.attachment[selectedId]);showTextModal('Attachment / notes','Add plain text or HTML notes for this node.',current,value=>{pushHistory();project.pluginData.attachment[selectedId]={...(project.pluginData.attachment[selectedId]||{}),text:value};setDirty();renderAll();});}
+function removeImage(){pushHistory();project.pluginData.image[selectedId]={};setDirty();renderAll();}
+imageInput.addEventListener('change',()=>{const file=imageInput.files[0];if(!file)return;const reader=new FileReader();reader.onload=()=>{pushHistory();project.pluginData.image[selectedId]={...(project.pluginData.image[selectedId]||{}),data:reader.result,name:file.name};setDirty();renderAll();imageInput.value='';};reader.onerror=()=>toast('The image could not be read.','error');reader.readAsDataURL(file);});
+
+function navigateDirection(key) {
+    const current=positions.get(selectedId);if(!current)return;
+    const candidates=[];positions.forEach((p,id)=>{if(id===selectedId)return;const dx=p.x-current.x,dy=p.y-current.y;let valid=false,primary=0,secondary=0;if(key==='ArrowRight'){valid=dx>5;primary=dx;secondary=Math.abs(dy);}if(key==='ArrowLeft'){valid=dx<-5;primary=-dx;secondary=Math.abs(dy);}if(key==='ArrowDown'){valid=dy>5;primary=dy;secondary=Math.abs(dx);}if(key==='ArrowUp'){valid=dy<-5;primary=-dy;secondary=Math.abs(dx);}if(valid)candidates.push({id,score:primary+secondary*2.2});});
+    candidates.sort((a,b)=>a.score-b.score);if(candidates[0])selectNode(candidates[0].id,true);
+}
+
+function openSearch() {el('searchBox').classList.add('show');el('searchInput').focus();el('searchInput').select();}
+function closeSearch(){el('searchBox').classList.remove('show');searchMatches=[];searchPosition=-1;}
+function runSearch(direction=1){const q=el('searchInput').value.trim().toLowerCase();if(!q)return;searchMatches=[...nodeIndex.values()].filter(n=>n.text.caption.toLowerCase().includes(q)).map(n=>n.id);if(!searchMatches.length){toast('No matching nodes found.','error');return;}searchPosition=(searchPosition+direction+searchMatches.length)%searchMatches.length;selectNode(searchMatches[searchPosition],true);}
+el('searchInput').addEventListener('input',()=>{searchPosition=-1;runSearch(1);});el('searchInput').addEventListener('keydown',e=>{if(e.key==='Enter')runSearch(e.shiftKey?-1:1);if(e.key==='Escape')closeSearch();});el('searchPrev').onclick=()=>runSearch(-1);el('searchNext').onclick=()=>runSearch(1);el('searchClose').onclick=closeSearch;
+
+function saveAutosave() {if(!project)return;try{localStorage.setItem('mindcanvas.autosave',JSON.stringify(project));localStorage.setItem('mindcanvas.lastId',project.id);if(localProjectKey)localStorage.setItem(localProjectKey,JSON.stringify(project));}catch(e){el('saveState').textContent='Browser storage full';}}
+
+function loadAutosave() {try{const raw=localStorage.getItem('mindcanvas.autosave');if(raw)return JSON.parse(raw);}catch(e){}return null;}
+
+function saveBrowserNamed() {const key=`mindcanvas.project.${project.id}`;localStorage.setItem(key,JSON.stringify(project));const list=JSON.parse(localStorage.getItem('mindcanvas.projectList')||'[]').filter(x=>x.id!==project.id);list.unshift({id:project.id,title:project.title,modified:now()});localStorage.setItem('mindcanvas.projectList',JSON.stringify(list.slice(0,50)));localProjectKey=key;setDirty(false);toast('Project saved in this browser.','success');}
+
+function showBrowserProjects() {let list=[];try{list=JSON.parse(localStorage.getItem('mindcanvas.projectList')||'[]');}catch(e){}showProjectListModal('Browser projects',list.map(x=>({filename:x.id,title:x.title,modified:x.modified})),id=>{const raw=localStorage.getItem(`mindcanvas.project.${id}`);if(raw)setProject(JSON.parse(raw));},id=>{localStorage.removeItem(`mindcanvas.project.${id}`);const updated=list.filter(x=>x.id!==id);localStorage.setItem('mindcanvas.projectList',JSON.stringify(updated));showBrowserProjects();});}
+
+function extractShareId(value) {
+    const text=String(value||'').trim();
+    if (/^[a-f0-9]{32}$/i.test(text)) return text.toLowerCase();
+    try {
+        const parsed=new URL(text,window.location.href);
+        const key=parsed.searchParams.get('share')||'';
+        return /^[a-f0-9]{32}$/i.test(key)?key.toLowerCase():'';
+    } catch (error) { return ''; }
+}
+
+async function sendServerRequest(action, payload=null, query={}) {
+    const address=new URL(window.location.href);
+    address.search='';
+    address.hash='';
+    address.searchParams.set('mindmap','1');
+    address.searchParams.set('mindmap_action',action);
+    Object.keys(query).forEach(key=>address.searchParams.set(key,query[key]));
+
+    const options={cache:'no-store'};
+    if(payload!==null){
+        options.method='POST';
+        options.headers={'Content-Type':'application/json'};
+        options.body=JSON.stringify(payload);
+    }
+
+    const response=await fetch(address.pathname+address.search,options);
+    const raw=await response.text();
+    let data;
+    try { data=JSON.parse(raw); }
+    catch(error){ throw new Error('The server returned an invalid response. Check the PHP error log.'); }
+
+    if(!data.ok)throw new Error(data.error||'The server action failed.');
+    return data;
+}
+
+async function loadSharedProject(shareId, announce=true) {
+    const key=extractShareId(shareId);
+    if(!key)throw new Error('Enter a valid shared-map link or share code.');
+    const data=await sendServerRequest('load',null,{share:key});
+    setProject(data.project,{serverShareId:data.shareId,serverShareUrl:data.shareUrl});
+    if(announce)toast('Shared map opened. Anyone with its link can edit it.','success');
+}
+
+async function createNewSessionFromSharedProject(shareId) {
+    const key=extractShareId(shareId);
+    if(!key)throw new Error('The new-session link is not valid.');
+    const data=await sendServerRequest('clone',{shareId:key});
+    setProject(data.project,{serverShareId:data.shareId,serverShareUrl:data.shareUrl});
+    toast('A new independent editing session has been created.','success');
+}
+
+function openSharedMap() {
+    const root=showModal('Open shared map',`<p class="share-note">Paste the editable share link, or enter its 32-character share code.</p><input id="sharedMapInput" type="text" placeholder="Paste a shared-map link" style="width:100%;margin-top:7px;padding:8px;border:1px solid #b9c2ca;border-radius:4px">`,`<button data-cancel>Cancel</button><button class="primary" data-open>Open</button>`,true);
+    const input=el('sharedMapInput');
+    const open=async()=>{try{await loadSharedProject(input.value);closeModal();}catch(error){toast(error.message,'error');}};
+    root.querySelector('[data-cancel]').onclick=closeModal;
+    root.querySelector('[data-open]').onclick=open;
+    input.addEventListener('keydown',event=>{if(event.key==='Enter')open();});
+    setTimeout(()=>input.focus());
+}
+
+async function copyShareLink(url,button,input) {
+    try {
+        if(navigator.clipboard&&window.isSecureContext)await navigator.clipboard.writeText(url);
+        else {
+            input.focus();input.select();
+            if(!document.execCommand('copy'))throw new Error('Copy was not available.');
+        }
+        if(button){const original=button.textContent;button.textContent='Copied';setTimeout(()=>button.textContent=original,1500);}
+        toast('Share link copied to the clipboard.','success');
+    } catch(error){
+        input.focus();input.select();
+        toast('The link is selected. Copy it manually with Ctrl+C.','error');
+    }
+}
+
+async function saveProjectToServer(forceNew=false) {
+    project.dates.modified=now();
+    const data=await sendServerRequest('save',{
+        shareId:forceNew?null:serverShareId,
+        forceNew:!!forceNew,
+        project
+    });
+
+    if(!forceNew){
+        serverShareId=data.shareId;
+        serverShareUrl=data.shareUrl;
+        if(data.project)project=normaliseProject(data.project);
+        updateShareAddress(serverShareId);
+        saveAutosave();
+        setDirty(false);
+    }
+
+    return data;
+}
+
+function openShareDialog() {
+    const root=showModal('Share mind map',`
+        <p class="share-note">The standard link opens and edits this shared map. Select <strong>Always open a new session</strong> to create a reusable template link. Every visit to that different URL creates a fresh independent copy before editing begins.</p>
+        <div class="share-option">
+            <input id="shareAlwaysNewSession" type="checkbox">
+            <label for="shareAlwaysNewSession">Always open a new session
+                <small>Each person who opens this URL receives a separate editable copy. Their changes will not affect this original map or anyone else’s session.</small>
+            </label>
+        </div>
+        <label id="shareLinkLabel" for="shareLinkInput">Editable share link</label>
+        <div class="share-link-row">
+            <input id="shareLinkInput" type="text" readonly value="">
+            <button id="copyShareLink" type="button" disabled>Copy link</button>
+        </div>
+        <div id="shareStatus" class="share-status">Saving the map and creating its link…</div>
+    `,`<button class="primary" data-done>Done</button>`,true);
+
+    const checkbox=el('shareAlwaysNewSession');
+    const label=el('shareLinkLabel');
+    const input=el('shareLinkInput');
+    const copyButton=el('copyShareLink');
+    const status=el('shareStatus');
+    let standardLink=serverShareUrl||'';
+    let alwaysNewLink='';
+    let busy=false;
+
+    function displayLink(url,message,isAlwaysNew){
+        input.value=url||'';
+        label.textContent=isAlwaysNew?'Always-new-session link':'Editable share link';
+        copyButton.disabled=!url;
+        status.classList.remove('error');
+        status.textContent=message;
+        if(url){input.focus();input.select();}
+    }
+
+    async function ensureCurrentMapIsSaved(){
+        if(standardLink&&!dirty&&serverShareId){
+            return {
+                shareId:serverShareId,
+                shareUrl:standardLink,
+                newSessionUrl:alwaysNewLink||''
+            };
+        }
+        const data=await saveProjectToServer(false);
+        standardLink=data.shareUrl;
+        alwaysNewLink=data.newSessionUrl||'';
+        return data;
+    }
+
+    async function buildLink(useAlwaysNew){
+        if(busy)return;
+        if(!useAlwaysNew&&standardLink&&!dirty){
+            displayLink(standardLink,'Shared-map link ready.',false);
+            return;
+        }
+        if(useAlwaysNew&&alwaysNewLink&&!dirty){
+            displayLink(alwaysNewLink,'Reusable new-session link ready. Every visit creates a fresh independent copy.',true);
+            return;
+        }
+
+        busy=true;
+        checkbox.disabled=true;
+        copyButton.disabled=true;
+        status.classList.remove('error');
+        status.textContent='Saving the current map and preparing its links…';
+
+        try {
+            const data=await ensureCurrentMapIsSaved();
+            standardLink=data.shareUrl||standardLink;
+            alwaysNewLink=data.newSessionUrl||alwaysNewLink;
+            if(!alwaysNewLink&&data.shareId){
+                const address=new URL(window.location.href);
+                address.search='';
+                address.hash='';
+                address.searchParams.set('mindmap','1');address.searchParams.set('new_session',data.shareId);
+                alwaysNewLink=address.toString();
+            }
+
+            if(useAlwaysNew){
+                displayLink(alwaysNewLink,'Reusable new-session link ready. Every visit creates a fresh independent copy.',true);
+            }else{
+                displayLink(standardLink,'Shared-map link ready.',false);
+            }
+        }catch(error){
+            input.value='';
+            copyButton.disabled=true;
+            status.classList.add('error');
+            status.textContent=error.message;
+        }finally{
+            busy=false;
+            checkbox.disabled=false;
+        }
+    }
+
+    checkbox.onchange=()=>buildLink(checkbox.checked);
+    copyButton.onclick=()=>copyShareLink(input.value,copyButton,input);
+    input.onclick=()=>input.select();
+    root.querySelector('[data-done]').onclick=closeModal;
+    buildLink(false);
+}
+
+
+function openTemplateGallery(){confirmDiscard(()=>{window.location.href=window.location.pathname+'?mindmap=1';});}
+
+function openSaveTemplateDialog(){
+    if(!nodeEditor.classList.contains('hidden'))commitNodeEdit(false);
+    const root=showModal('Save as template',`
+        <p class="share-note">This publishes an anonymous reusable template on the MindCanvas landing page. Enter the administrator password from <code>charter-config.php</code> to authorise the save.</p>
+        <div class="field" style="grid-template-columns:110px minmax(0,1fr)"><label for="templateTitle">Template name</label><input id="templateTitle" type="text" value="${escapeAttr(project.title||'Mind map template')}"></div>
+        <div class="field" style="grid-template-columns:110px minmax(0,1fr)"><label for="templateDescription">Description</label><textarea id="templateDescription" style="min-height:85px" placeholder="Explain what this template helps users do."></textarea></div>
+        <div class="field" style="grid-template-columns:110px minmax(0,1fr)"><label for="templatePassword">Password</label><input id="templatePassword" type="password" autocomplete="current-password"></div>
+        <div id="templateSaveStatus" class="share-status"></div>
+        <div id="templateSavedLinkRow" class="share-link-row hidden"><input id="templateSavedLink" type="text" readonly><button id="copyTemplateLink" type="button">Copy link</button></div>
+    `,`<button data-cancel>Cancel</button><button class="primary" data-save-template>Save template</button>`,true);
+
+    const title=el('templateTitle');
+    const description=el('templateDescription');
+    const password=el('templatePassword');
+    const status=el('templateSaveStatus');
+    const linkRow=el('templateSavedLinkRow');
+    const linkInput=el('templateSavedLink');
+    const saveButton=root.querySelector('[data-save-template]');
+
+    root.querySelector('[data-cancel]').onclick=closeModal;
+    el('copyTemplateLink').onclick=()=>copyShareLink(linkInput.value,el('copyTemplateLink'),linkInput);
+    saveButton.onclick=async()=>{
+        const templateTitle=title.value.trim()||project.title||'Mind map template';
+        const templateDescription=description.value.trim();
+        if(!password.value){status.className='share-status error';status.textContent='Enter the administrator password.';password.focus();return;}
+        saveButton.disabled=true;
+        status.className='share-status';
+        status.textContent='Saving the template…';
+        try{
+            const data=await sendServerRequest('save_template',{
+                title:templateTitle,
+                description:templateDescription,
+                password:password.value,
+                project
+            });
+            password.value='';
+            status.className='share-status';
+            status.textContent='Template saved. It is now listed on the landing page.';
+            linkInput.value=data.templateUrl||'';
+            linkRow.classList.toggle('hidden',!linkInput.value);
+            if(linkInput.value){linkInput.focus();linkInput.select();}
+            toast('Template saved successfully.','success');
+        }catch(error){
+            status.className='share-status error';
+            status.textContent=error.message;
+            password.focus();password.select();
+        }finally{
+            saveButton.disabled=false;
+        }
+    };
+    setTimeout(()=>{title.focus();title.select();});
+}
+
+function downloadJson(){project.dates.modified=now();downloadBlob(new Blob([JSON.stringify(project,null,2)],{type:'application/json'}),safeFilename(project.title)+'.json');setDirty(false);}
+
+async function openLinkedFile(){if(!window.showOpenFilePicker){toast('Linked-file saving is not supported by this browser. Use Open JSON instead.','error');return;}try{const [handle]=await showOpenFilePicker({types:[{description:'Mind map JSON',accept:{'application/json':['.json']}}],multiple:false});const file=await handle.getFile();const data=JSON.parse(await file.text());setProject(data,{linkedFileHandle:handle});toast(`Linked to ${file.name}.`,'success');}catch(e){if(e.name!=='AbortError')toast(e.message,'error');}}
+async function saveLinkedFile(){if(!linkedFileHandle){downloadJson();return;}try{project.dates.modified=now();const writable=await linkedFileHandle.createWritable();await writable.write(JSON.stringify(project,null,2));await writable.close();setDirty(false);toast('Linked file saved.','success');}catch(e){toast(e.message,'error');}}
+
+fileInput.addEventListener('change',()=>{const file=fileInput.files[0];if(!file)return;const reader=new FileReader();reader.onload=()=>{try{setProject(JSON.parse(reader.result));toast(`Opened ${file.name}.`,'success');}catch(e){toast(e.message,'error');}fileInput.value='';};reader.onerror=()=>toast('The JSON file could not be read.','error');reader.readAsText(file);});
+
+function buildExportSvg(options={}) {
+    renderMap();const b=mapBounds(false),pad=35,w=Math.ceil(b.width+pad*2),h=Math.ceil(b.height+pad*2);
+    const out=createSvg('svg',{xmlns:NS,width:w,height:h,viewBox:`${b.minX-pad} ${b.minY-pad} ${w} ${h}`});
+    const defs=svg.querySelector('defs').cloneNode(true);out.appendChild(defs);
+    const bg=createSvg('rect',{x:b.minX-pad,y:b.minY-pad,width:w,height:h,fill:'#ffffff'});out.appendChild(bg);
+    const content=createSvg('g');
+    content.appendChild(branchesLayer.cloneNode(true));
+    if(options.includeCrossConnections!==false)content.appendChild(crossLayer.cloneNode(true));
+    content.appendChild(nodesLayer.cloneNode(true));
+    content.querySelectorAll('.selection-ring,.child-drag-control,.child-preview').forEach(n=>n.remove());content.querySelectorAll('.node').forEach(n=>n.classList.remove('selected'));out.appendChild(content);
+    return {svg:out,width:w,height:h};
+}
+
+function exportSvg(){const ex=buildExportSvg();const xml=new XMLSerializer().serializeToString(ex.svg);downloadBlob(new Blob([xml],{type:'image/svg+xml'}),safeFilename(project.title)+'.svg');}
+function exportPng(){const ex=buildExportSvg({includeCrossConnections:false}),xml=new XMLSerializer().serializeToString(ex.svg),url=URL.createObjectURL(new Blob([xml],{type:'image/svg+xml'})),img=new Image();img.onload=()=>{const max=10000,scale=Math.min(2,max/Math.max(ex.width,ex.height));const c=document.createElement('canvas');c.width=Math.ceil(ex.width*scale);c.height=Math.ceil(ex.height*scale);const ctx=c.getContext('2d');ctx.scale(scale,scale);ctx.drawImage(img,0,0);URL.revokeObjectURL(url);c.toBlob(blob=>downloadBlob(blob,safeFilename(project.title)+'.png'),'image/png');};img.onerror=()=>{URL.revokeObjectURL(url);toast('PNG export failed. Try SVG export instead.','error');};img.src=url;}
+function printMap(){const ex=buildExportSvg(),xml=new XMLSerializer().serializeToString(ex.svg),win=window.open('','_blank');if(!win){toast('Allow pop-ups to print the map.','error');return;}win.document.write(`<!doctype html><title>${escapeHtml(project.title)}</title><style>html,body{margin:0}svg{width:100%;height:auto}</style>${xml}<script>onload=()=>setTimeout(()=>print(),200)<\/script>`);win.document.close();}
+function downloadBlob(blob,filename){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=filename;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},2000);}
+function safeFilename(name){return String(name||'mindmap').replace(/[\\/:*?"<>|]+/g,'_').trim()||'mindmap';}
+
+function dispatchAction(action) {
+    closeMenus();closeContextMenu();
+    const actions={
+        'new':()=>confirmDiscard(()=>setProject(createDefaultProject())),
+        'template-gallery':openTemplateGallery,
+        'open-file':()=>fileInput.click(),'open-linked':openLinkedFile,'browser-projects':showBrowserProjects,'open-shared':openSharedMap,
+        'save-share':openShareDialog,'save-linked':saveLinkedFile,'download-json':downloadJson,'save-browser':saveBrowserNamed,'save-template':openSaveTemplateDialog,
+        'export-svg':exportSvg,'export-png':exportPng,'print':printMap,'undo':undo,'redo':redo,'copy':()=>copyBranch(false),'cut':()=>copyBranch(true),'paste':pasteBranch,
+        'find':openSearch,'add-child':addChild,'add-sibling':addSibling,'edit-node':beginNodeEdit,'delete-node':deleteSelected,'fold':toggleFold,
+        'add-url':editUrls,'edit-notes':editNotes,'add-image':()=>imageInput.click(),'connect':startConnection,
+        'zoom-in':()=>zoomBy(1.15),'zoom-out':()=>zoomBy(.87),'fit':fitMap,'centre-selected':centreSelected,'auto-layout':autoLayout,
+        'toggle-grid':()=>{gridVisible=!gridVisible;canvasShell.style.backgroundImage=gridVisible?'radial-gradient(#cbd2d9 1px,transparent 1px)':'none';},
+        'toggle-inspector':toggleInspector,'help':showHelp,'about':showAbout
+    };
+    if(actions[action])actions[action]();
+}
+
+document.addEventListener('click',e=>{const action=e.target.closest('[data-action]')?.dataset.action;if(action)dispatchAction(action);});
+document.querySelectorAll('.menu>button').forEach(button=>button.onclick=e=>{e.stopPropagation();const menu=button.parentElement;const open=menu.classList.contains('open');closeMenus();if(!open)menu.classList.add('open');});
+document.addEventListener('click',e=>{if(!e.target.closest('.menu'))closeMenus();});
+function closeMenus(){document.querySelectorAll('.menu.open').forEach(m=>m.classList.remove('open'));}
+
+el('mapTitle').addEventListener('change',e=>{const title=e.target.value.trim()||'Mind map';if(title!==project.title){pushHistory();project.title=title;syncTitle();setDirty();}});
+
+function toggleInspector(){inspectorVisible=!inspectorVisible;el('rightPanel').style.display=inspectorVisible?'block':'none';document.querySelector('.workspace').style.gridTemplateColumns=inspectorVisible?(window.innerWidth<=1000?'0 minmax(280px,1fr) 285px':'220px minmax(280px,1fr) 304px'):(window.innerWidth<=1000?'0 minmax(280px,1fr)':'220px minmax(280px,1fr)');setTimeout(()=>{applyCamera();renderNavigator();},0);}
+
+function showContextMenu(x,y){closeContextMenu();const root=el('contextRoot');const menu=document.createElement('div');menu.className='context-menu';menu.style.left=`${Math.min(x,innerWidth-205)}px`;menu.style.top=`${Math.min(y,innerHeight-270)}px`;menu.innerHTML=`<button data-action="add-child">New child <kbd>Tab</kbd></button><button data-action="add-sibling">New sibling <kbd>Enter</kbd></button><button data-action="edit-node">Edit <kbd>F2</kbd></button><button data-action="copy">Copy branch <kbd>Ctrl+C</kbd></button><button data-action="paste">Paste branch <kbd>Ctrl+V</kbd></button><button data-action="fold">Fold/unfold</button><button data-action="connect">Connect</button><button data-action="delete-node">Delete <kbd>Del</kbd></button>`;root.appendChild(menu);}
+function closeContextMenu(){el('contextRoot').replaceChildren();}
+
+function showModal(title,bodyHtml,footerHtml='',small=false){const root=el('modalRoot');root.innerHTML=`<div class="modal-backdrop"><div class="modal ${small?'small':''}"><div class="modal-header"><h2>${escapeHtml(title)}</h2><button class="modal-close" data-modal-close>×</button></div><div class="modal-body">${bodyHtml}</div>${footerHtml?`<div class="modal-footer">${footerHtml}</div>`:''}</div></div>`;root.querySelector('[data-modal-close]').onclick=closeModal;root.querySelector('.modal-backdrop').onclick=e=>{if(e.target===e.currentTarget)closeModal();};return root;}
+function closeModal(){el('modalRoot').replaceChildren();}
+function showConfirm(title,message,onYes){const root=showModal(title,`<p>${escapeHtml(message)}</p>`,`<button data-cancel>Cancel</button><button class="primary" data-yes>Continue</button>`,true);root.querySelector('[data-cancel]').onclick=closeModal;root.querySelector('[data-yes]').onclick=()=>{closeModal();onYes();};}
+function confirmDiscard(callback){if(!dirty){callback();return;}showConfirm('Unsaved changes','Continue and discard the current unsaved changes?',callback);}
+function showPrompt(title,label,value,onSave){const root=showModal(title,`<label>${escapeHtml(label)}</label><input id="modalPrompt" type="text" value="${escapeAttr(value)}" style="width:100%;margin-top:7px;padding:8px;border:1px solid #b9c2ca;border-radius:4px">`,`<button data-cancel>Cancel</button><button class="primary" data-save>Save</button>`,true);const input=el('modalPrompt');root.querySelector('[data-cancel]').onclick=closeModal;root.querySelector('[data-save]').onclick=()=>onSave(input.value.trim());input.addEventListener('keydown',e=>{if(e.key==='Enter')onSave(input.value.trim());});setTimeout(()=>{input.focus();input.select();});}
+function showTextModal(title,help,value,onSave){const root=showModal(title,`<p>${escapeHtml(help)}</p><textarea id="modalText"></textarea>`,`<button data-cancel>Cancel</button><button class="primary" data-save>Save</button>`);el('modalText').value=value;root.querySelector('[data-cancel]').onclick=closeModal;root.querySelector('[data-save]').onclick=()=>{const v=el('modalText').value;closeModal();onSave(v);};setTimeout(()=>el('modalText').focus());}
+function showProjectListModal(title,list,onOpen,onDelete){const html=list.length?`<div class="project-list">${list.map(item=>`<div class="project-item"><div><div class="project-name">${escapeHtml(item.title||item.filename)}</div><div class="project-date">${item.modified?new Date(item.modified).toLocaleString():'Unknown date'}</div></div><button data-open="${escapeAttr(item.filename)}">Open</button><button data-delete="${escapeAttr(item.filename)}">Delete</button></div>`).join('')}</div>`:'<p>No saved projects were found.</p>';const root=showModal(title,html);root.querySelectorAll('[data-open]').forEach(b=>b.onclick=async()=>{try{await onOpen(b.dataset.open);}catch(e){toast(e.message,'error');}});root.querySelectorAll('[data-delete]').forEach(b=>b.onclick=()=>showConfirm('Delete project?',`Delete ${b.dataset.delete}?`,async()=>{try{await onDelete(b.dataset.delete);}catch(e){toast(e.message,'error');}}));}
+function showHelp(){showModal('Keyboard shortcuts',`<div class="help-grid"><kbd>F2</kbd><span>Edit node text</span><kbd>Tab / Insert</kbd><span>Create a child node</span><kbd>Enter</kbd><span>Create a sibling node</span><kbd>Delete / Backspace</kbd><span>Delete selected branch</span><kbd>Arrow keys</kbd><span>Navigate between nearby nodes</span><kbd>Ctrl+Z / Ctrl+Y</kbd><span>Undo / redo</span><kbd>Ctrl+C / X / V</kbd><span>Copy / cut / paste branch</span><kbd>Ctrl+O</kbd><span>Open JSON project</span><kbd>Ctrl+S</kbd><span>Open the share-link window</span><kbd>Ctrl+K</kbd><span>Edit node URLs</span><kbd>Ctrl+F</kbd><span>Find nodes</span><kbd>Ctrl+P</kbd><span>Print map</span></div>`);}
+function showAbout(){showModal('About MindCanvas',`<p>MindCanvas is a single-page PHP, HTML and JavaScript mind-map editor designed to read and write the hierarchical JSON project format used by MindMapMaker-style applications.</p><p>Projects remain in your browser unless you explicitly download them or choose Save and share. Shared maps are stored in the MySQL/MariaDB database configured in <code>charter-config.php</code> and are editable by anyone who has the unguessable share link.</p><p><strong>Compatibility:</strong> imported node trees, IDs, style data, layout offsets, images, attachments, URLs, drawing data and cross-node connections are preserved when the project is exported again.</p>`);}
+function toast(message,type=''){const t=document.createElement('div');t.className=`toast ${type}`;t.textContent=message;el('toastStack').appendChild(t);setTimeout(()=>t.remove(),3500);}
+
+function handleKeyboard(e){
+    if(e.target.matches('input,textarea,select')||!nodeEditor.classList.contains('hidden'))return;
+    const ctrl=e.ctrlKey||e.metaKey,key=e.key.toLowerCase();
+    if(e.key==='F1'){e.preventDefault();showHelp();return;}if(e.key==='F2'){e.preventDefault();beginNodeEdit();return;}
+    if(ctrl&&key==='z'){e.preventDefault();e.shiftKey?redo():undo();return;}if(ctrl&&(key==='y')){e.preventDefault();redo();return;}
+    if(ctrl&&key==='c'){e.preventDefault();copyBranch(false);return;}if(ctrl&&key==='x'){e.preventDefault();copyBranch(true);return;}if(ctrl&&key==='v'){e.preventDefault();pasteBranch();return;}
+    if(ctrl&&key==='o'){e.preventDefault();fileInput.click();return;}if(ctrl&&key==='s'){e.preventDefault();openShareDialog();return;}if(ctrl&&key==='a'){e.preventDefault();saveLinkedFile();return;}if(ctrl&&key==='p'){e.preventDefault();printMap();return;}if(ctrl&&key==='k'){e.preventDefault();editUrls();return;}if(ctrl&&key==='f'){e.preventDefault();openSearch();return;}if(ctrl&&key==='n'){e.preventDefault();confirmDiscard(()=>setProject(createDefaultProject()));return;}
+    if(e.key==='Tab'||e.key==='Insert'){e.preventDefault();addChild();return;}if(e.key==='Enter'){e.preventDefault();addSibling();return;}if(e.key==='Delete'||e.key==='Backspace'){e.preventDefault();deleteSelected();return;}
+    if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)){e.preventDefault();navigateDirection(e.key);}
+}
+document.addEventListener('keydown',handleKeyboard);
+window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue='';}});
+window.addEventListener('resize',()=>{applyCamera();renderNavigator();});
+
+async function initialiseApplication(){
+    if(INITIAL_NEW_SESSION_ID){
+        try{
+            await createNewSessionFromSharedProject(INITIAL_NEW_SESSION_ID);
+            return;
+        }catch(error){
+            toast(error.message,'error');
+        }
+    }
+    if(INITIAL_SHARE_ID){
+        try{
+            await loadSharedProject(INITIAL_SHARE_ID,false);
+            return;
+        }catch(error){
+            toast(error.message,'error');
+        }
+    }
+    if(INITIAL_TEMPLATE_PROJECT){
+        setProject(INITIAL_TEMPLATE_PROJECT);
+        toast('Template opened as a new independent project.','success');
+        return;
+    }
+    if(INITIAL_TEMPLATE_ERROR)toast(INITIAL_TEMPLATE_ERROR,'error');
+    if(INITIAL_BLANK_REQUEST){
+        setProject(createDefaultProject());
+        return;
+    }
+    const recovered=loadAutosave();
+    setProject(recovered||createDefaultProject());
+}
+initialiseApplication();
+})();
+</script>
+<script>
+/* Common Charter 0.0.3 panel management for flowcharts, DFDs, ERDs and mind maps. */
+(()=>{
+ 'use strict';
+ const map={settings:document.getElementById('charterSettingsPanel'),source:document.getElementById('sourcePanel'),controls:document.getElementById('controlsPanel')||document.querySelector('.left-panel'),inspector:document.getElementById('inspectorPanel')||document.getElementById('rightPanel'),canvas:document.getElementById('canvasShell')};
+ const workspace=document.querySelector('.workspace');
+ if(!workspace||!map.settings)return;
+ const mind=!!document.getElementById('mapSvg');
+ const defaults=mind?{settings:44,source:0,controls:220,inspector:304}:{settings:44,source:390,controls:190,inspector:270};
+ const sizes={...defaults};
+ const hidden=new Set(mind?['source']:[]);
+ function refresh(){
+   for(const [key,node] of Object.entries(map))if(node)node.classList.toggle('charter-view-hidden',hidden.has(key));
+   document.documentElement.style.setProperty('--charter-settings-height',hidden.has('settings')?'0px':sizes.settings+'px');
+   const parts=mind?['controls','canvas','inspector']:['source','controls','canvas','inspector'];
+   const widths=parts.map(k=>hidden.has(k)?'0px':k==='canvas'?'minmax(0,1fr)':sizes[k]+'px');
+   workspace.style.setProperty('grid-template-columns',widths.join(' '),'important');
+   for(const button of document.querySelectorAll('[data-charter-view]')){
+      const k=button.dataset.charterView;
+      button.textContent=(hidden.has(k)?'□ ':'✓ ')+({settings:'Diagram settings',source:'Diagram source',controls:mind?'Navigator / Outline':'Controls',inspector:'Inspector',canvas:'Canvas'}[k]||k);
+   }
+   window.dispatchEvent(new Event('resize'));
+ }
+ function reset(){Object.assign(sizes,defaults);hidden.clear();if(mind)hidden.add('source');
+    document.body.classList.remove('source-panel-hidden');
+    for(const key of ['sourcePanelWidth','controlsPanelWidth','inspectorPanelWidth'])try{localStorage.removeItem('charter.'+key)}catch(_){}
+    document.documentElement.style.removeProperty('--source-width');document.documentElement.style.removeProperty('--controls-width');document.documentElement.style.removeProperty('--inspector-width');
+    refresh();}
+ function addGrip(node,edge,key,isY=false){if(!node)return;
+   if(getComputedStyle(node).position==='static')node.style.position='relative';
+   const grip=document.createElement('div');grip.className=isY?'charter-toolbar-grip':'charter-panel-grip'+(edge==='left'?' left-edge':'');grip.title='Drag to resize; double-click to reset all panels';node.appendChild(grip);
+   let start=null;
+   grip.addEventListener('pointerdown',e=>{if(e.button!==0)return;e.preventDefault();e.stopPropagation();start={pointerId:e.pointerId,pos:isY?e.clientY:e.clientX,size:sizes[key]};grip.setPointerCapture(e.pointerId)});
+   grip.addEventListener('pointermove',e=>{if(!start||e.pointerId!==start.pointerId)return;const delta=(isY?e.clientY:e.clientX)-start.pos;sizes[key]=Math.round(Math.max(isY?34:140,Math.min(isY?240:900,start.size+delta*(edge==='left'?-1:1))));refresh()});
+   grip.addEventListener('pointerup',()=>{start=null});grip.addEventListener('pointercancel',()=>{start=null});
+   grip.addEventListener('dblclick',e=>{e.stopPropagation();reset()});
+ }
+ addGrip(map.settings,'bottom','settings',true);
+ if(mind){addGrip(map.controls,'right','controls');addGrip(map.inspector,'left','inspector')}
+ // Existing Charter source/controls/inspector panels already have their own width handles.
+ for(const node of Object.values(map))if(node)node.addEventListener('dblclick',e=>{
+   if(e.target.closest('input,textarea,select,button,svg,[contenteditable],.node,.diagram-node'))return;
+   if(e.target.closest('.panel-head,.panel-header,.charter-toolbar-grip,.charter-panel-grip'))reset();
+ });
+ document.addEventListener('click',e=>{
+   const toggle=e.target.closest('[data-charter-view]');
+   if(toggle){e.preventDefault();e.stopImmediatePropagation();const key=toggle.dataset.charterView;if(hidden.has(key))hidden.delete(key);else hidden.add(key);if(key==='source')document.body.classList.toggle('source-panel-hidden',hidden.has('source'));refresh();return}
+   if(e.target.closest('[data-charter-reset]')){e.preventDefault();e.stopImmediatePropagation();reset()}
+ },true);
+ if(!mind){const previous=document.querySelector('[data-action="toggle-source"]');if(previous)previous.addEventListener('click',()=>{setTimeout(()=>{if(document.body.classList.contains('source-panel-hidden'))hidden.add('source');else hidden.delete('source');refresh()},0)})}
+ // Do not overwrite URL-driven source visibility.
+ if(!mind){const hiddenSource=document.body.classList.contains('source-panel-hidden')||new URLSearchParams(location.search).get('source')==='hide';if(hiddenSource)hidden.add('source')}
+ refresh();
+})();
+</script>
+</body>
+</html>
+<?php exit; } ?>
+<?php
 /*
- * Charter - single-file diagram editor for flowcharts, DFDs and ERDs.
- * Application version 0.0.2
- * Copyright (c) 2026 Simon Walker & Timothy Lever, Department of Education, Queensland, Australia
+ * Charter - single-file diagram editor for flowcharts, DFDs, ERDs and MindCanvas mind maps.
+ * Application version 0.0.3
  * -------------------------
  *
  * Keep charter-config.php in the same directory as this file.
@@ -119,7 +3205,7 @@ function charter_database_connection()
     }
 
     mysqli_report(MYSQLI_REPORT_OFF);
-    $mysqli = @new mysqli($dbHost, $dbUser, $dbPassword, $dbName);
+    $mysqli = charter_auto_connect($dbHost, $dbName, $dbUser, $dbPassword);
 
     if ($mysqli->connect_errno) {
         throw new RuntimeException(
@@ -1026,7 +4112,7 @@ if ($showLanding) {
     try {
         $mysqli = charter_database_connection();
         $result = $mysqli->query(
-            'SELECT template_key, title, description, diagram_type, source_type, created_at FROM charter_templates ORDER BY created_at DESC LIMIT 100'
+            "SELECT template_key, title, description, diagram_type, source_type, created_at FROM charter_templates ORDER BY created_at DESC LIMIT 100"
         );
         if ($result === false) {
             throw new RuntimeException('Saved templates could not be listed. MySQL error ' . $mysqli->errno . ': ' . $mysqli->error);
@@ -1051,6 +4137,14 @@ if ($initialProject === null) {
     );
 }
 
+$mindmapLandingTemplates = array(
+ 'brainstorming'=>array('title'=>'Brainstorming','category'=>'Ideas','description'=>'Create and organise ideas around a central question.'),
+ 'essay-planner'=>array('title'=>'Essay Planner','category'=>'Writing','description'=>'Organise your thesis, evidence, paragraphs and conclusion.'),
+ 'project-plan'=>array('title'=>'Project Plan','category'=>'Planning','description'=>'Map deliverables, milestones, people, timeline and risks.'),
+ 'swot-analysis'=>array('title'=>'SWOT Analysis','category'=>'Strategy','description'=>'Branch out strengths, weaknesses, opportunities and threats.'),
+ 'study-notes'=>array('title'=>'Study Notes','category'=>'Learning','description'=>'Connect concepts, definitions, examples and revision prompts.'),
+ 'software-design'=>array('title'=>'Software Design','category'=>'Technology','description'=>'Map users, requirements, data, design and testing.')
+);
 if ($showLanding) {
 ?>
 <!doctype html>
@@ -1087,10 +4181,11 @@ if ($showLanding) {
 <header class="hero"><div class="hero-inner">
 <div class="brand"><span class="brand-mark"></span><span>Charter</span></div>
 <h1>Turn structured text into clear technical diagrams.</h1>
-<p>Create Flowgorithm-style flowcharts from an interactive Flowgorithm diagram notation, Python, QCAA Pseudocode, Gatton Pseudocode or JavaScript, plus data-flow diagrams and entity-relationship diagrams from editable text.</p>
+<p>Create Flowgorithm-style flowcharts, data-flow diagrams, entity-relationship diagrams and fully editable mind maps, with tools suited to each diagram type.</p>
 <div class="quick">
 <a href="?new=flowchart">New flowchart</a>
 <a href="?new=dfd">New DFD</a>
+<a href="?mindmap=1&new=1">New mind map</a>
 <a href="?new=erd&syntax=sql">New SQL ERD</a>
 <a class="secondary" href="?new=erd&syntax=prisma">New Prisma ERD</a>
 <a class="secondary" href="?new=erd&syntax=quickdbd">New QuickDBD ERD</a>
@@ -1101,6 +4196,7 @@ if ($showLanding) {
 <p class="section-intro">Choose a starting point. Each template opens as an independent diagram.</p>
 <?php if ($templateDatabaseError !== '') { ?><div class="error"><?php echo charter_html_escape($templateDatabaseError); ?></div><?php } ?>
 <div class="cards">
+<a class="card" href="?new=mindmap"><span class="badge">MindCanvas</span><h3>Mind map</h3><p>Full MindCanvas editor: hierarchical branches, drag and drop, styling, attachments, cross-links, sharing and templates.</p><span class="open">Open MindCanvas editor →</span></a>
 <?php foreach ($builtInTemplates as $templateKey => $template) { ?>
 <a class="card" href="?template=<?php echo rawurlencode($templateKey); ?>">
 <span class="badge"><?php echo charter_html_escape($template['category']); ?></span>
@@ -1111,13 +4207,29 @@ if ($showLanding) {
 <?php } ?>
 </div>
 </section>
+<section class="section">
+<h2>MindCanvas starter templates</h2>
+<p class="section-intro">Start a mind map using the integrated MindCanvas editor. All four diagram types share Charter's project and template storage.</p>
+<div class="cards">
+<?php foreach (array('brainstorming','essay-planner','project-plan','swot-analysis','study-notes','software-design') as $mindTemplateSlug) {
+    $mindTemplate = $mindmapLandingTemplates[$mindTemplateSlug]; ?>
+<a class="card" href="?mindmap=1&amp;template=<?php echo rawurlencode($mindTemplateSlug); ?>">
+<span class="badge">MindCanvas · <?php echo charter_html_escape($mindTemplate['category']); ?></span>
+<h3><?php echo charter_html_escape($mindTemplate['title']); ?></h3>
+<p><?php echo charter_html_escape($mindTemplate['description']); ?></p>
+<span class="open">Open mind-map template →</span>
+</a>
+<?php } ?>
+</div>
+<p style="margin:14px 0 0"><a href="?mindmap=1">View all MindCanvas templates →</a></p>
+</section>
 <?php if (count($savedTemplates) > 0) { ?>
 <section class="section">
 <h2>Saved templates</h2>
 <p class="section-intro">Password-authorised templates saved anonymously from Charter.</p>
 <div class="cards">
 <?php foreach ($savedTemplates as $template) { ?>
-<a class="card" href="?template=<?php echo rawurlencode($template['template_key']); ?>">
+<a class="card" href="<?php echo ($template['diagram_type'] === 'mindmap' ? '?mindmap=1&amp;template=' : '?template=') . rawurlencode($template['template_key']); ?>">
 <span class="badge"><?php echo charter_html_escape(strtoupper($template['diagram_type']) . ' · ' . $template['source_type']); ?></span>
 <h3><?php echo charter_html_escape($template['title']); ?></h3>
 <p><?php echo charter_html_escape($template['description']); ?></p>
@@ -1146,7 +4258,7 @@ if ($showLanding) {
 *{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden}body{font-family:Inter,"Segoe UI",Arial,sans-serif;color:var(--ink);background:var(--canvas);font-size:14px}button,input,select,textarea{font:inherit}.hidden{display:none!important}.app{height:100%;display:grid;grid-template-rows:48px 45px minmax(0,1fr) 28px}.topbar{display:flex;align-items:center;gap:14px;padding:0 13px;color:#fff;background:linear-gradient(180deg,var(--top),var(--top2));box-shadow:0 1px 5px rgba(0,0,0,.38);z-index:30}.brand{display:flex;align-items:center;gap:8px;font-weight:800;font-size:16px}.brand-mark{width:28px;height:28px;border-radius:7px;background:linear-gradient(145deg,#ffbd52,#e4800c);position:relative}.brand-mark:before{content:"";position:absolute;width:16px;height:3px;left:6px;top:7px;background:#fff;box-shadow:0 6px 0 #fff,0 12px 0 #fff}.brand-mark:after{content:"";position:absolute;width:3px;height:16px;left:12px;top:6px;background:#fff}.menu-strip{display:flex;height:100%}.menu{position:relative}.menu>button{height:100%;border:0;background:transparent;color:#e8edf1;padding:0 10px;cursor:pointer}.menu>button:hover,.menu.open>button{background:rgba(255,255,255,.1)}.dropdown{display:none;position:absolute;top:45px;left:0;min-width:240px;padding:6px;background:#fff;color:var(--ink);border:1px solid #c7ced5;border-radius:5px;box-shadow:var(--shadow);z-index:200}.menu.open .dropdown{display:block}.dropdown button{display:flex;justify-content:space-between;width:100%;border:0;background:transparent;padding:8px 10px;border-radius:4px;text-align:left;color:var(--ink);cursor:pointer}.dropdown button:hover{background:#edf2f6}.dropdown hr{border:0;border-top:1px solid #e1e5e9;margin:5px 0}.nested-menu{position:relative}.nested-menu>button:after{content:'›';font-size:18px;line-height:1}.nested-menu-panel{display:none;position:absolute;left:100%;top:-6px;min-width:220px;padding:6px;background:#fff;border:1px solid #c7ced5;border-radius:5px;box-shadow:var(--shadow);z-index:210}.nested-menu:hover>.nested-menu-panel,.nested-menu:focus-within>.nested-menu-panel{display:block}kbd{font-size:10px;color:#69747f;border:1px solid #d2d7dc;border-bottom-width:2px;border-radius:3px;background:#f1f3f5;padding:1px 4px}.title-wrap{margin-left:auto;display:flex;align-items:center;gap:8px;min-width:200px;max-width:470px;flex:1;justify-content:flex-end}.unsaved-dot{width:8px;height:8px;border-radius:50%;background:#ffb43e;opacity:0}.unsaved-dot.show{opacity:1}#diagramTitle{width:min(100%,350px);background:rgba(255,255,255,.09);color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:4px;padding:6px 9px;outline:none}.toolbar{display:flex;align-items:center;gap:5px;padding:5px 8px;background:#e7ecf0;border-bottom:1px solid #c4ccd3;overflow-x:auto;z-index:20}.toolbar label{font-size:11px;color:#53616d}.toolbar select{height:33px;border:1px solid #b9c3cb;border-radius:4px;background:#fff;padding:0 7px}.tool-btn{height:33px;min-width:34px;border:1px solid transparent;border-radius:4px;background:transparent;color:#26333e;cursor:pointer;padding:0 9px}.tool-btn:hover{background:#fff;border-color:#c4cbd2}.tool-btn:disabled{opacity:.45;cursor:not-allowed}.sep{width:1px;height:27px;background:#c4ccd2;margin:0 4px}.zoom-readout{min-width:49px;text-align:center;font-size:12px;color:#53616d}.workspace{min-height:0;display:grid;grid-template-columns:var(--source-width) var(--controls-width,190px) minmax(320px,1fr) var(--inspector-width,270px)}.panel{min-height:0;background:var(--panel);z-index:10}.source-panel{border-right:1px solid var(--line);display:flex;flex-direction:column;position:relative}.source-resize-handle{position:absolute;top:0;right:-5px;bottom:0;width:10px;cursor:col-resize;z-index:25;background:transparent}.source-resize-handle:hover,.source-resize-handle.active{background:rgba(36,117,168,.18)}.controls-panel{border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden;position:relative}.controls-resize-handle{position:absolute;top:0;right:-5px;bottom:0;width:10px;cursor:col-resize;z-index:25;background:transparent}.controls-resize-handle:hover,.controls-resize-handle.active{background:rgba(36,117,168,.18)}.control-palette{padding:8px;overflow:auto;display:flex;flex-direction:column;gap:7px}.control-item{display:grid;grid-template-columns:42px minmax(0,1fr);gap:8px;align-items:center;width:100%;padding:7px;border:1px solid #cbd3da;border-radius:6px;background:#fff;color:#263640;text-align:left;cursor:grab;user-select:none}.control-item:hover{background:#eef5fa;border-color:#8eb5cf}.control-item:active{cursor:grabbing}.control-palette.flowgorithm-palette{display:block;padding:8px 7px 12px}.flowgorithm-statement-header{background:#a9c9f2;border:1px solid #6187b4;padding:7px 9px;margin-bottom:10px;font-size:12px;color:#172b41}.flowgorithm-groups{display:grid;grid-template-columns:repeat(4,minmax(72px,1fr));gap:8px}.flow-control-group{min-width:0}.flow-control-group-title{text-align:center;font-size:11px;color:#192633;margin:0 0 8px;white-space:nowrap}.flowgorithm-palette .control-item{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:4px;border:0;background:transparent;padding:3px 1px;cursor:grab}.flowgorithm-palette .control-item:hover{background:#f0f4f7;border-color:transparent}.flowgorithm-palette .control-label{display:none}.flowgorithm-palette .control-icon{width:78px;height:34px;font-size:11px;font-weight:500;color:#111}.flowgorithm-palette .control-icon.fg-input{border-width:2px;background:#b0e0ff;border-color:#5080a0;transform:skew(-24deg)}.flowgorithm-palette .control-icon.fg-input span{transform:skew(24deg)}.flowgorithm-palette .control-icon.fg-output{border-width:2px;background:#d0ffd0;border-color:#70a070;transform:skew(-24deg)}.flowgorithm-palette .control-icon.fg-output span{transform:skew(24deg)}.flowgorithm-palette .control-icon.fg-declare{width:78px;height:34px;clip-path:none;border:2px solid #a0a070;background:#ffffd0}.flowgorithm-palette .control-icon.fg-declare:before{content:"";position:absolute;left:8px;top:0;bottom:0;border-left:1px solid #a0a070}.flowgorithm-palette .control-icon.fg-assign{width:78px;height:34px;border:2px solid #a0a070;background:#ffffd0}.flowgorithm-palette .control-icon.fg-if{width:58px;height:34px;border:1px solid #a07070;background:#ffd0d0;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);transform:none;margin-left:0}.flowgorithm-palette .control-icon.fg-if span{transform:none}.flowgorithm-palette .control-icon.fg-call{border:1px solid #9070a0;background:#f0e0ff}.flowgorithm-palette .control-icon.fg-call:before,.flowgorithm-palette .control-icon.fg-call:after{background:#9070a0;width:1px}.flowgorithm-palette .control-icon.fg-loop{border:1px solid #a08040;background:#ffe0a0;clip-path:polygon(14% 0,86% 0,100% 50%,86% 100%,14% 100%,0 50%)}.control-palette.flowgorithm-palette{display:flex;flex-direction:column;gap:8px;padding:8px}.flowgorithm-groups{display:flex;flex-direction:column;gap:10px}.flow-control-group{display:flex;flex-direction:column;gap:5px}.flow-control-group-title{text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.35px;color:#65727d;margin:2px 2px 1px}.flowgorithm-palette .control-item{display:grid;grid-template-columns:84px minmax(0,1fr);gap:8px;align-items:center;justify-content:stretch;width:100%;padding:6px 7px;border:1px solid #d1d8de;border-radius:6px;background:#fff;cursor:grab}.flowgorithm-palette .control-item:hover{background:#f0f4f7;border-color:#9bb6c8}.flowgorithm-palette .control-label{display:block}.flowgorithm-palette .control-label strong{font-size:12px;font-weight:600}.flowgorithm-palette .control-icon{justify-self:center}.control-icon{width:38px;height:31px;display:flex;align-items:center;justify-content:center;position:relative;color:#29485d;font-weight:800}.control-icon.process{border:2px solid #58758a;border-radius:3px;background:#fff}.control-icon.decision{width:27px;height:27px;border:2px solid #c27b18;background:#fff8e8;transform:rotate(45deg);margin-left:5px}.control-icon.decision span{transform:rotate(-45deg)}.control-icon.io{width:34px;height:27px;border:2px solid #3d83b6;background:#eef7ff;transform:skew(-12deg)}.control-icon.terminator{border:2px solid #358d57;border-radius:18px;background:#edf9f1}.control-icon.stop-sign{width:38px;height:38px;border:2px solid #8b2b25;background:#ffd7d3;clip-path:polygon(30% 0,70% 0,100% 30%,100% 70%,70% 100%,30% 100%,0 70%,0 30%)}.control-icon.rounded{border:2px solid #7255a5;border-radius:8px;background:#f6f2ff}.control-icon.dfd-process{border:2px solid #222;border-radius:8px;background:#d3d3d3}.control-icon.entity{border:2px solid #222;background:#d0d0d0;box-shadow:-5px -5px 0 -2px #d0d0d0,-5px -5px 0 0 #222}.control-icon.store{border:2px solid #222;background:#fff}.control-icon.store:before{content:attr(data-kind);width:12px;border-right:2px solid #222;height:100%;display:flex;align-items:center;justify-content:center;font-size:10px}.control-icon.table{border:2px solid #496b83;border-radius:3px;background:linear-gradient(#365d78 0 10px,#fff 10px)}.control-icon.textbox{font-size:22px;border:1px dashed #8a98a3;background:#fff}.control-icon.fg-assign{border:2px solid #a0a070;border-radius:2px;background:#ffffd0}.control-icon.fg-declare{width:34px;height:27px;background:#ffffd0;border:2px solid #a0a070;clip-path:polygon(12% 0,88% 0,100% 50%,88% 100%,12% 100%,0 50%)}.control-icon.fg-input{width:34px;height:27px;border:2px solid #5080a0;background:#b0e0ff;transform:skew(-12deg)}.control-icon.fg-output{width:34px;height:27px;border:2px solid #70a070;background:#d0ffd0;transform:skew(12deg)}.control-icon.fg-if{width:27px;height:27px;border:2px solid #a07070;background:#ffd0d0;transform:rotate(45deg);margin-left:5px}.control-icon.fg-if span{transform:rotate(-45deg)}.control-icon.fg-loop{width:34px;height:27px;border:2px solid #a08040;background:#ffe0a0;clip-path:polygon(14% 0,86% 0,100% 50%,86% 100%,14% 100%,0 50%)}.control-icon.fg-call{border:2px solid #9070a0;background:#f0e0ff}.control-icon.fg-call:before,.control-icon.fg-call:after{content:"";position:absolute;top:0;bottom:0;width:2px;background:#9070a0}.control-icon.fg-call:before{left:7px}.control-icon.fg-call:after{right:7px}.control-icon.fg-comment{border:1px dashed #8c8458;background:#fffde8;font-size:10px;color:#6e6743}.control-label strong{display:block;font-size:12px}.control-label small{display:block;color:#6a7781;font-size:10px;line-height:1.25;margin-top:2px}.right-panel{border-left:1px solid var(--line);overflow:auto;position:relative}.inspector-resize-handle{position:absolute;top:0;left:-5px;bottom:0;width:10px;cursor:col-resize;z-index:25;background:transparent}.inspector-resize-handle:hover,.inspector-resize-handle.active{background:rgba(36,117,168,.18)}.panel-head{height:39px;display:flex;align-items:center;justify-content:space-between;padding:0 10px;background:#e7ebef;border-bottom:1px solid var(--line);font-weight:750;color:#34424e}.source-meta{padding:9px 10px;border-bottom:1px solid var(--line);background:#f5f7f9;color:#5d6a75;font-size:12px;line-height:1.4}.editor-wrap{position:relative;flex:1;min-height:0;background:#17212b}.line-numbers{position:absolute;left:0;top:0;bottom:0;width:43px;padding:11px 7px;color:#72808d;background:#111920;text-align:right;font:13px/1.55 Consolas,"Courier New",monospace;white-space:pre;overflow:hidden;user-select:none;border-right:1px solid #2d3943}.source-editor{position:absolute;inset:0 0 0 43px;width:calc(100% - 43px);height:100%;resize:none;border:0;outline:0;padding:11px 12px;background:#17212b;color:#e4ebf0;caret-color:#ffb33f;tab-size:2;font:13px/1.55 Consolas,"Courier New",monospace;white-space:pre;overflow:auto}.source-footer{padding:7px 9px;border-top:1px solid var(--line);background:#eef2f5}.parse-status{min-height:19px;color:#52616c;font-size:12px}.parse-status.error{color:#a8332a}.canvas-shell{position:relative;min-width:0;min-height:0;overflow:hidden;background-color:var(--canvas);background-image:radial-gradient(#c5ced6 1px,transparent 1px);background-size:20px 20px}.canvas-shell.no-grid{background-image:none}#diagramSvg{width:100%;height:100%;display:block;touch-action:none;cursor:grab;user-select:none}#diagramSvg.panning{cursor:grabbing}.node{cursor:move}.node .body{filter:drop-shadow(0 1px 1px rgba(0,0,0,.17))}.node.selected .selection{display:block}.selection{display:none;fill:none;stroke:#e74c3c;stroke-width:2;stroke-dasharray:6 4;vector-effect:non-scaling-stroke}.edge{fill:none;stroke:#000;stroke-width:3;vector-effect:non-scaling-stroke;pointer-events:none}.edge.hovered{stroke:#e74c3c}.edge.selected{stroke:#e74c3c;stroke-width:3;stroke-dasharray:8 5;animation:edgeMarch .65s linear infinite}@keyframes edgeMarch{to{stroke-dashoffset:-13}}.edge-hit{fill:none;stroke:transparent;stroke-width:16;vector-effect:non-scaling-stroke;pointer-events:stroke;cursor:pointer}.flow-insert-arrow{cursor:pointer}.flow-insert-arrow .flow-insert-halo{fill:#fff;fill-opacity:.96;stroke:#d94138;stroke-width:1.6;vector-effect:non-scaling-stroke}.flow-insert-arrow:hover .flow-insert-halo{fill:#fff1ef;stroke:#b62822;stroke-width:2}.relationship-cardinality{pointer-events:none}.relationship-cardinality.selected line,.relationship-cardinality.selected circle{stroke:#e74c3c}.edge-label{cursor:pointer}.edge-label rect{fill:rgba(255,255,255,.92);stroke:#d2d9df;stroke-width:1}.edge-label.selected rect{stroke:#e74c3c;stroke-width:1.5}.edge-label text{pointer-events:none}.canvas-hint{position:absolute;left:12px;bottom:12px;padding:6px 9px;border:1px solid #c9d1d8;border-radius:4px;background:rgba(255,255,255,.88);color:#64727d;font-size:12px;pointer-events:none}.loading-cover{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(238,242,245,.88);z-index:20;font-size:16px;font-weight:750;color:#435260}.inspector{padding:12px}.empty{padding:30px 16px;text-align:center;color:var(--muted)}.info-card{border:1px solid #d3dae0;border-radius:6px;background:#fff;margin-bottom:11px;overflow:hidden}.info-card h3{font-size:13px;margin:0;padding:9px 10px;background:#edf1f4;border-bottom:1px solid #d7dde2}.info-body{padding:10px}.field{display:grid;grid-template-columns:86px minmax(0,1fr);gap:7px;align-items:center;margin-bottom:8px}.field:last-child{margin-bottom:0}.field label{font-size:11px;color:#5d6a75}.field input,.field select,.field textarea{width:100%;border:1px solid #bcc6ce;border-radius:4px;padding:5px 6px;background:#fff}.field input[type=color]{height:31px;padding:2px}.recent-colours-block{margin-top:8px;padding-top:8px;border-top:1px solid #e0e5e9}.recent-colours-title{font-size:11px;color:#5d6a75;margin-bottom:6px}.recent-colours{display:flex;gap:6px;flex-wrap:wrap;min-height:25px;align-items:center}.recent-colour{width:25px!important;height:25px!important;min-width:25px;padding:0!important;border:1px solid #8f9aa3!important;border-radius:4px!important;box-shadow:inset 0 0 0 1px rgba(255,255,255,.45);cursor:pointer}.recent-colours-empty{font-size:10px;color:#84909a}.format-checks{display:flex;gap:8px;flex-wrap:wrap;font-size:11px;color:#53616d}.format-checks label{display:flex;align-items:center;gap:3px}.format-checks input{width:auto}.floating-text{cursor:move}.floating-text text{pointer-events:none}.floating-text .text-hit{fill:rgba(255,255,255,.001);stroke:none;pointer-events:all}.floating-text .text-selection{display:none;fill:none;stroke:#e74c3c;stroke-width:1.5;stroke-dasharray:5 3;vector-effect:non-scaling-stroke;pointer-events:none}.floating-text.selected .text-selection{display:block}.mini-actions{display:flex;gap:5px;flex-wrap:wrap}.mini-btn{border:1px solid #bec7cf;border-radius:4px;background:#fff;padding:6px 8px;cursor:pointer}.mini-btn:hover{background:#edf2f6}.syntax-help{font-size:12px;line-height:1.5;color:#53616d}.syntax-help code{display:block;white-space:pre-wrap;background:#17212b;color:#dce5eb;padding:8px;border-radius:4px;margin-top:6px;font-family:Consolas,"Courier New",monospace}.statusbar{display:flex;align-items:center;gap:18px;padding:0 10px;background:#dfe5e9;border-top:1px solid #c3cbd2;color:#52606b;font-size:12px}.statusbar .grow{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.modal-backdrop{position:fixed;inset:0;z-index:500;display:flex;align-items:center;justify-content:center;padding:18px;background:rgba(13,20,27,.57)}.modal{display:flex;flex-direction:column;width:min(680px,100%);max-height:min(760px,92vh);background:#fff;border-radius:8px;box-shadow:0 18px 55px rgba(0,0,0,.36);overflow:hidden}.modal.small{width:min(490px,100%)}.modal-head{display:flex;justify-content:space-between;align-items:center;padding:13px 16px;background:#edf1f4;border-bottom:1px solid #cdd4da}.modal-head h2{font-size:17px;margin:0}.modal-close{border:0;background:transparent;font-size:22px;color:#63717d;cursor:pointer}.modal-body{padding:15px 16px;overflow:auto}.modal-foot{display:flex;justify-content:flex-end;gap:8px;padding:10px 16px;border-top:1px solid #d4dae0}.modal button{border:1px solid #b9c2ca;border-radius:4px;background:#fff;padding:7px 12px;cursor:pointer}.modal button.primary{background:var(--blue);border-color:var(--blue-dark);color:#fff}.modal textarea{width:100%;min-height:130px;border:1px solid #b9c3cb;border-radius:5px;padding:8px;resize:vertical}.new-object-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:9px}.new-object-choice{display:grid!important;grid-template-columns:46px minmax(0,1fr);gap:9px;align-items:center;text-align:left!important;padding:10px!important}.new-object-choice strong{display:block}.new-object-choice small{display:block;color:#687582;font-size:11px;margin-top:3px;line-height:1.3}.share-note{color:#5c6974;line-height:1.48}.share-option{display:flex;align-items:flex-start;gap:9px;margin:13px 0;padding:10px;background:#f7f9fa;border:1px solid #d4dae0;border-radius:5px}.share-option input{margin-top:3px}.share-option label{font-weight:700}.share-option small{display:block;margin-top:3px;color:#66737e;font-weight:400;line-height:1.4}.share-link-row{display:flex;gap:7px;margin-top:7px}.share-link-row input{flex:1;min-width:0;border:1px solid #b9c3cb;border-radius:4px;padding:8px;background:#f8fafb}.share-link-row button{background:var(--blue);color:#fff;border-color:var(--blue-dark)}.share-status{min-height:20px;margin-top:8px;color:#5b6974;font-size:13px}.share-status.error{color:#a83228}.toast-stack{position:fixed;right:15px;bottom:41px;z-index:1000;display:flex;flex-direction:column;gap:8px;pointer-events:none}.toast{min-width:230px;max-width:390px;background:#25323c;color:#fff;border-radius:5px;padding:10px 12px;box-shadow:var(--shadow)}.toast.error{background:#9f332a}.toast.success{background:#267346}@media(max-width:1180px){.workspace{grid-template-columns:var(--source-width) min(var(--controls-width,156px),220px) minmax(300px,1fr) 0}.right-panel{visibility:hidden}.tool-label{display:none}}@media(max-width:820px){.workspace{grid-template-columns:126px minmax(280px,1fr)}.source-resize-handle{display:none}.source-panel{position:absolute;left:0;top:93px;bottom:28px;width:min(390px,88vw);transform:translateX(-100%);transition:.2s;box-shadow:3px 0 14px rgba(0,0,0,.2)}.source-panel.mobile-open{transform:translateX(0)}.controls-panel{grid-column:1}.menu-strip{display:none}.title-wrap{min-width:100px}}@media(max-width:560px){.workspace{grid-template-columns:minmax(280px,1fr)}.controls-panel{display:none}}@media print{.topbar,.toolbar,.source-panel,.controls-panel,.right-panel,.statusbar,.canvas-hint{display:none!important}.app,.workspace,.canvas-shell{display:block;width:100%;height:100%;background:#fff}#diagramSvg{width:100vw;height:100vh}}
 
 
-/* Execution console and current-control spotlight — Charter 0.0.1 */
+/* Execution console and current-control spotlight — Charter 0.0.3 */
 .run-output{
   background:#000!important;color:#fff!important;
   font-family:Consolas,"Lucida Console","Courier New",monospace!important;
@@ -1176,7 +4288,7 @@ if ($showLanding) {
 }
 @media(prefers-reduced-motion:reduce){.node.run-active .body{animation:none!important;filter:drop-shadow(0 0 25px #ffba39) drop-shadow(0 0 60px #ff468a)!important}}
 
-/* Flowgorithm controls — Charter 0.0.1 baseline */
+/* Flowgorithm controls — Charter 0.0.3 baseline */
 .default-caption::placeholder{color:#8b949b;opacity:1;font-style:italic}
 .node .body{vector-effect:non-scaling-stroke}
 .flowgorithm-palette svg.control-icon,.new-object-choice svg.control-icon{display:block;background:transparent!important;border:0!important;clip-path:none!important;overflow:visible}
@@ -1220,6 +4332,23 @@ body.source-panel-hidden .workspace{grid-template-columns:var(--controls-width,1
 /* Reverse the OUTPUT parallelogram to match its diagram geometry. */
 .flowgorithm-palette .control-icon.fg-output{transform:skew(24deg)!important}
 .flowgorithm-palette .control-icon.fg-output span{transform:skew(-24deg)!important}
+
+/* Shared icon geometry in Controls and Insert control modal. */
+.flowgorithm-palette svg.control-icon,.control-insert-choice svg.control-icon{width:78px!important;height:40px!important;transform:none!important;clip-path:none!important;border:0!important;background:none!important;overflow:visible!important;flex:none}
+.flowgorithm-palette svg.control-icon.stop-sign,.control-insert-choice svg.control-icon.stop-sign{width:46px!important;height:46px!important}
+.flowgorithm-palette svg.control-icon.fg-if,.control-insert-choice svg.control-icon.fg-if{width:78px!important;height:46px!important;transform:none!important}
+.control-insert-choice svg.control-icon polygon,.control-insert-choice svg.control-icon rect,.flowgorithm-palette svg.control-icon polygon,.flowgorithm-palette svg.control-icon rect{stroke-linejoin:round}
+
+/* Unified resizable panels / view controls for all four Charter diagrams */
+.app{grid-template-rows:46px var(--charter-settings-height,44px) minmax(0,1fr) 27px!important}
+.toolbar{position:relative;overflow:auto;resize:none;min-height:33px;max-height:180px;align-content:start;flex-wrap:wrap}
+.charter-toolbar-grip{position:absolute;bottom:0;left:0;right:0;height:7px;cursor:ns-resize;background:linear-gradient(to bottom,transparent,#b3bbc7);z-index:10}
+.charter-view-hidden{display:none!important}
+.charter-view-menu button{display:block;width:100%;text-align:left;padding:7px 10px;border:0;background:transparent;color:inherit;white-space:nowrap}
+.charter-view-menu button:hover{background:#e8edf3;color:#142333}
+.charter-settings-label{font-weight:650;white-space:nowrap;margin:3px 7px}
+.charter-panel-grip{position:absolute;top:0;bottom:0;width:7px;right:0;cursor:ew-resize;z-index:11}
+.charter-panel-grip.left-edge{left:0;right:auto}
 </style>
 </head>
 <body>
@@ -1231,7 +4360,8 @@ body.source-panel-hidden .workspace{grid-template-columns:var(--controls-width,1
 <button data-action="templates">Template gallery</button>
 <button data-action="new-flow">New flowchart</button>
 <button data-action="new-dfd">New DFD</button>
-<button data-action="new-erd">New ERD</button><hr>
+<button data-action="new-erd">New ERD</button>
+<button data-action="new-mindmap">MindCanvas · New mind map</button><hr>
 <button data-action="open-json">Open JSON… <kbd>Ctrl+O</kbd></button>
 <button data-action="save-share">Share… <kbd>Ctrl+S</kbd></button>
 <button data-action="save-template">Save as template…</button>
@@ -1261,6 +4391,14 @@ body.source-panel-hidden .workspace{grid-template-columns:var(--controls-width,1
 <button data-action="toggle-grid">Toggle grid</button>
 <button data-action="toggle-labels">Toggle edge labels</button>
 </div></div>
+<div class="menu charter-view-menu"><button type="button">View</button><div class="dropdown">
+<button type="button" data-charter-view="settings">✓ Diagram settings</button>
+<button type="button" data-charter-view="source">✓ Diagram source</button>
+<button type="button" data-charter-view="controls">✓ Controls / Navigator</button>
+<button type="button" data-charter-view="inspector">✓ Inspector</button>
+<button type="button" data-charter-view="canvas">✓ Canvas</button><hr>
+<button type="button" data-charter-reset="all">Reset all panels</button>
+</div></div>
 <div class="menu"><button type="button">Help</button><div class="dropdown">
 <button data-action="syntax-help">Notation help</button>
 <button data-action="about">About Charter</button>
@@ -1268,8 +4406,8 @@ body.source-panel-hidden .workspace{grid-template-columns:var(--controls-width,1
 </nav>
 <div class="title-wrap"><span id="unsavedDot" class="unsaved-dot" title="Unsaved changes"></span><input id="diagramTitle" aria-label="Diagram title"></div>
 </header>
-<div class="toolbar">
-<label for="diagramType">Diagram</label><select id="diagramType"><option value="flowchart">Flowchart</option><option value="dfd">DFD</option><option value="erd">ERD</option></select>
+<div class="toolbar" id="charterSettingsPanel">
+<label for="diagramType">Diagram</label><select id="diagramType"><option value="flowchart">Flowchart</option><option value="dfd">DFD</option><option value="erd">ERD</option><option value="mindmap">MindCanvas · Mind map</option></select>
 <label for="sourceType">Code</label><select id="sourceType"></select>
 <label for="direction">Layout</label><select id="direction"><option value="TB">Top → bottom</option><option value="LR">Left → right</option><option value="GRID">Grid</option><option value="FV">Fixed vertical (Flowgorithm)</option></select>
 <label for="lineType">Lines</label><select id="lineType"><option value="orthogonal">90°</option><option value="direct">Direct</option><option value="curved">Curved</option></select>
@@ -2048,6 +5186,7 @@ function dfdToCode(target){
 }
 function codeForExport(target){if(project.diagramType==='flowchart')return convertFlowchartSource(sourceEditor.value,project.sourceType,target);if(project.diagramType==='dfd')return dfdToCode(target);return '';}
 function exportCode(target){
+    if(project.diagramType==='erd'&&target==='python'){openExportSqlDialog(true);return;}
     const labels={python:'Python',qcaa:'QCAA Pseudocode',gatton:'Gatton Pseudocode',javascript:'JavaScript'},extensions={python:'py',qcaa:'txt',gatton:'txt',javascript:'js'},code=codeForExport(target);if(!code){toast('Export to '+(labels[target]||target)+' is available for flowcharts and DFDs.','error');return;}downloadBlob(new Blob([code],{type:'text/plain;charset=utf-8'}),safeFilename(project.title)+'.'+extensions[target]);toast('Exported to '+labels[target]+'.','success');
 }
 function switchFlowchartSourceType(targetType){
@@ -2172,54 +5311,87 @@ function measureNode(node){
 }
 
 function fixedVerticalPositions(model){
-    // Deterministic source-order layout. The main path is centred; conditional/loop
-    // branch targets are displayed on opposing sides, and never manually draggable.
+    // Structured top-to-bottom flowchart layout: both arms of each decision share
+    // the next row (south-west/south-east), and terminal endings occupy the last row.
     const nodes=model.nodes||[],edges=model.edges||[],positions=new Map();
     if(!nodes.length)return positions;
     const byId=new Map(nodes.map(n=>[n.id,n]));
     const outgoing=new Map(nodes.map(n=>[n.id,[]]));
     const incoming=new Map(nodes.map(n=>[n.id,[]]));
     edges.forEach(e=>{if(outgoing.has(e.from)&&incoming.has(e.to)){outgoing.get(e.from).push(e);incoming.get(e.to).push(e);}});
-    const order=new Map(nodes.map((n,i)=>[n.id,i]));
     const isBranch=n=>['if','while','for'].includes(String(n.flowKind||'').toLowerCase())||['flow-if','flow-loop','flow-for'].includes(n.shape);
-    const roots=nodes.filter(n=>!incoming.get(n.id).length);
-    const first=roots.find(n=>/^(start|terminal)$/i.test(n.key||''))||roots[0]||nodes[0];
-    const queued=new Set(),rows=[];
-    const walk=(node,column,depth)=>{
-        if(!node||queued.has(node.id))return;
-        queued.add(node.id);rows.push({node,column,depth});
-        const next=outgoing.get(node.id)||[];
-        if(isBranch(node)&&next.length>=2){
-            // Connections are source ordered: first is True/body, second False/exit.
-            // Place those two paths to the left and right of the control.
-            walk(byId.get(next[0].to),column-1,depth+1);
-            walk(byId.get(next[1].to),column+1,depth+1);
-            next.slice(2).forEach(e=>walk(byId.get(e.to),column,depth+1));
-        }else next.forEach(e=>walk(byId.get(e.to),column,depth+1));
-    };
-    walk(first,0,0);
-    // Include disconnected controls in source order, continuing below the diagram.
-    nodes.forEach(n=>{if(!queued.has(n.id))walk(n,0,Math.max(0,...rows.map(r=>r.depth))+1);});
-    const occupied=new Map();
-    rows.forEach(entry=>{
-        let row=entry.depth;
-        while(occupied.has(entry.column+':'+row))row++;
-        occupied.set(entry.column+':'+row,true);
-        positions.set(entry.node.id,{x:entry.column*330,y:row*140});
+    const isStart=n=>/^(start|begin)(?:\d+)?$/i.test(String(n.key||'')) || (n.flowKind==='terminal'&&/start|begin/i.test(String(n.label||'')));
+    const isFinish=n=>/^(end|stop|finish)(?:\d+)?$/i.test(String(n.key||''))||n.flowKind==='stop';
+    const roots=nodes.filter(n=>!(incoming.get(n.id)||[]).length);
+    const start=nodes.find(isStart)||roots[0]||nodes[0];
+    const levels=new Map([[start.id,0]]),columns=new Map([[start.id,0]]);
+    const queue=[start.id];let guard=0;
+    while(queue.length&&guard++<nodes.length*12){
+        const id=queue.shift(),node=byId.get(id),depth=levels.get(id)||0,col=columns.get(id)||0;
+        const next=outgoing.get(id)||[];
+        next.forEach((edge,index)=>{
+            const target=byId.get(edge.to);if(!target||target.id===start.id||isStart(target))return;
+            const suggested=depth+1,previous=levels.get(target.id);
+            // Never propagate back edges up the diagram or re-expand known loops.
+            if(previous!==undefined&&previous<=depth)return;
+            const nextDepth=previous===undefined?suggested:Math.max(previous,suggested);
+            if(nextDepth>nodes.length+3)return;
+            levels.set(target.id,nextDepth);
+            if(isBranch(node)&&next.length>=2&&index<2)columns.set(target.id,col+(index===0?-1:1));
+            else if(!columns.has(target.id))columns.set(target.id,col);
+            if(previous===undefined||nextDepth!==previous)queue.push(target.id);
+        });
+    }
+    let bottom=Math.max(0,...levels.values());
+    nodes.forEach(n=>{if(!levels.has(n.id)){levels.set(n.id,++bottom);columns.set(n.id,0);}});
+    // Nodes reached from both arms rejoin the centre below their predecessors.
+    nodes.forEach(n=>{const parents=(incoming.get(n.id)||[]).map(e=>levels.get(e.from)).filter(Number.isFinite);if(parents.length>1){levels.set(n.id,Math.max(levels.get(n.id)||0,Math.max(...parents)+1));columns.set(n.id,0);}});
+    let last=Math.max(0,...levels.values());
+    nodes.filter(n=>isFinish(n)&&n.id!==start.id).forEach(n=>{levels.set(n.id,Math.max(last,levels.get(n.id)||0));columns.set(n.id,0);});
+    // Make sure no unrelated objects overlap in the same row/column.
+    const occupied=new Set();
+    nodes.forEach(n=>{let row=levels.get(n.id)||0,col=columns.get(n.id)||0;
+        if(n.id===start.id){row=0;col=0;}
+        if(!isFinish(n))while(occupied.has(row+':'+col)){col=col===0?1:col>0?-col:1-col;}
+        occupied.add(row+':'+col);positions.set(n.id,{x:col*330,y:row*140});
     });
-    // Reconverging branches belong on the centre spine below both incoming paths.
-    nodes.filter(n=>(incoming.get(n.id)||[]).length>1).forEach(n=>{
-        const dest=positions.get(n.id);if(!dest)return;
-        const parents=(incoming.get(n.id)||[]).map(e=>positions.get(e.from)).filter(Boolean);
-        if(parents.length){dest.x=0;dest.y=Math.max(dest.y,...parents.map(pt=>pt.y+140));}
-    });
-    const ys=[...positions.values()].map(v=>v.y);const mid=(Math.min(...ys)+Math.max(...ys))/2;
+    const ys=[...positions.values()].map(v=>v.y),mid=(Math.min(...ys)+Math.max(...ys))/2;
     positions.forEach(v=>{v.y-=mid;});
     return positions;
 }
 function isFixedVertical(){return !!project&&project.diagramType==='flowchart'&&project.direction==='FV';}
+function charterStructuredAutoPositions(model){
+    const result=new Map();
+    if(project.diagramType==='dfd'){
+        const processes=model.nodes.filter(n=>n.type==='process').sort((a,b)=>(Number(a.processNumber)||Number.POSITIVE_INFINITY)-(Number(b.processNumber)||Number.POSITIVE_INFINITY)||Number(a.sourceOrder||0)-Number(b.sourceOrder||0));
+        const entities=model.nodes.filter(n=>n.type==='entity'),stores=model.nodes.filter(n=>n.type==='store');
+        const row=240;
+        processes.forEach((node,i)=>result.set(node.id,{x:0,y:i*row}));
+        // Connectors fan out to opposite sides; vary horizontal distance to avoid parallel overlaps.
+        const locate=(items,side)=>items.forEach((node,i)=>{
+            const related=processes.filter(p=>model.edges.some(e=>(e.from===node.id&&e.to===p.id)||(e.to===node.id&&e.from===p.id)));
+            const average=related.length?related.reduce((sum,p)=>sum+result.get(p.id).y,0)/related.length:i*row;
+            const y=Math.max(i*row*0.92,average+(i%2?65:-65));
+            result.set(node.id,{x:side*(460+(i%2)*80),y});
+        });
+        locate(entities,-1);locate(stores,1);
+        model.nodes.filter(n=>!result.has(n.id)).forEach((n,i)=>result.set(n.id,{x:0,y:(processes.length+i)*row}));
+    }else if(project.diagramType==='erd'){
+        // Alternating-column staircase prevents large tables from crowding or aligning edges.
+        let leftY=0,rightY=180;
+        model.nodes.forEach((node,i)=>{
+            const size=measureNode(node),left=i%2===0;
+            const y=left?leftY:rightY;
+            result.set(node.id,{x:left?-280:330,y});
+            if(left)leftY+=size.height+225;else rightY+=size.height+225;
+        });
+    }
+    if(result.size){const ys=[...result.values()].map(p=>p.y),mid=(Math.min(...ys)+Math.max(...ys))/2;result.forEach(p=>p.y-=mid);}
+    return result;
+}
 function computeAutoPositions(model,force=false){
-    if(isFixedVertical())return fixedVerticalPositions(model);
+    if(isFixedVertical()||(force&&project.diagramType==='flowchart'&&project.sourceType==='flowgorithm'&&project.direction==='TB'))return fixedVerticalPositions(model);
+    if(force&&(project.diagramType==='dfd'||project.diagramType==='erd'))return charterStructuredAutoPositions(model);
     const positions=new Map(),stored=project.layout.positions||{},storedByKey=project.layout.positionsByKey||{};
     model.nodes.forEach(node=>{
         if(force)return;
@@ -2492,7 +5664,7 @@ function beginInlineFlowgorithmEdit(node,group,size){
     const fo=createSvg('foreignObject',{x:-size.width/2+8,y:-size.height/2+8,width:Math.max(40,size.width-16),height:Math.max(34,size.height-16)});
     const input=document.createElement('input');input.setAttribute('xmlns','http://www.w3.org/1999/xhtml');input.type='text';input.value=explicit||String(node.key||node.label||'');input.style.cssText='width:100%;height:100%;border:2px solid #2475a8;border-radius:4px;background:rgba(255,255,255,.96);font:500 21px Inter,Segoe UI,Arial,sans-serif;text-align:center;padding:4px 8px;outline:none;';
     fo.appendChild(input);group.appendChild(fo);
-    let finished=false;const finish=commit=>{if(finished)return;finished=true;const value=input.value.trim();if(commit&&value){pushUndoSnapshot();if(explicit)updateFlowgorithmNodeFields(node,node.key,value);else updateFlowgorithmNodeFields(node,value,'');}else renderDiagram();};
+    let finished=false;const finish=commit=>{if(finished)return;finished=true;const value=input.value.trim();if(commit&&value){pushUndoSnapshot();updateFlowgorithmNodeFields(node,node.key,value);}else renderDiagram();};
     input.addEventListener('pointerdown',e=>e.stopPropagation());input.addEventListener('click',e=>e.stopPropagation());input.addEventListener('dblclick',e=>e.stopPropagation());input.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();finish(true);}else if(e.key==='Escape'){e.preventDefault();finish(false);}});input.addEventListener('blur',()=>finish(true));setTimeout(()=>{input.focus();input.select();},0);
 }
 function renderNode(node){
@@ -2564,6 +5736,18 @@ function updateFlowgorithmNodeFields(node,newName,newCaption,newValue){
             const pos=lines[i].match(/^\s*#\s*@position\s+(\S+)\s+(.+)$/i);if(pos&&pos[1]===oldName)lines[i]='# @position '+newName+' '+pos[2];
         }
     }
+    // Renaming changes the stable node ID. Transfer the original absolute canvas position
+    // before reparsing, rather than automatically laying the renamed node out again.
+    if(newName!==oldName){
+        const oldPoint=currentPositions.get(node.id)||project.layout.positions[node.id];
+        if(oldPoint&&Number.isFinite(Number(oldPoint.x))&&Number.isFinite(Number(oldPoint.y))){
+            const nextId=stableId('flowgorithm',newName),point={x:Number(oldPoint.x),y:Number(oldPoint.y)};
+            project.layout.positions[nextId]={...point};
+            project.layout.positionsByKey[nodeLayoutKey({...node,key:newName})]={...point};
+            delete project.layout.positions[node.id];
+            delete project.layout.positionsByKey[nodeLayoutKey(node)];
+        }
+    }
     sourceEditor.value=lines.join('\n');project.source=sourceEditor.value;updateLineNumbers();renderFromSource({fit:false,markDirty:false});
     const id=stableId('flowgorithm',newName);selectItem('node',id,false);setDirty(true);persistLayoutSoon();return true;
 }
@@ -2611,7 +5795,7 @@ svg.addEventListener('pointerup',event=>{if(dragState){const moved=dragState.mov
 svg.addEventListener('pointercancel',()=>{dragState=null;panState=null;svg.classList.remove('panning');});
 svg.addEventListener('dblclick',event=>{if(event.target.closest('.node')||event.target.closest('.floating-text')||event.target.closest('.edge-hit')||event.target.closest('.edge-label'))return;event.preventDefault();event.stopPropagation();addFloatingTextboxAt(event.clientX,event.clientY);});
 canvasShell.addEventListener('dragover',event=>{if(event.dataTransfer&&Array.from(event.dataTransfer.types||[]).includes('application/x-charter-control')){event.preventDefault();event.dataTransfer.dropEffect='copy';}});
-canvasShell.addEventListener('drop',event=>{const type=event.dataTransfer?event.dataTransfer.getData('application/x-charter-control'):'';if(!type)return;event.preventDefault();const p=screenToWorld(event.clientX,event.clientY);addControlAtWorld(type,p.x,p.y);});
+canvasShell.addEventListener('drop',event=>{const type=event.dataTransfer?event.dataTransfer.getData('application/x-charter-control'):'';if(!type)return;event.preventDefault();const p=screenToWorld(event.clientX,event.clientY);addControlAtWorld(type,p.x,p.y,!!(event.ctrlKey||event.metaKey||event.dataTransfer.getData('application/x-charter-unlinked')==='1'));});
 svg.addEventListener('wheel',event=>{event.preventDefault();const rect=svg.getBoundingClientRect(),mx=event.clientX-rect.left,my=event.clientY-rect.top,old=camera.scale,next=Math.min(3,Math.max(.2,old*(event.deltaY<0?1.12:.89)));camera.x=mx-(mx-camera.x)*(next/old);camera.y=my-(my-camera.y)*(next/old);camera.scale=next;renderDiagram();},{passive:false});
 
 function stripFixedVerticalLayoutSource(){
@@ -2754,6 +5938,40 @@ function disconnectSelectedObjects(){
     const kept=lines.filter(line=>{const arrow=parseArrowLine(stripLineComment(line).trim());if(!arrow)return true;const key=arrow.from+'>'+arrow.to;if(pairKeys.has(key)){removed++;return false;}return true;});
     if(!removed){toast('The selected objects are not connected.','error');return false;}
     pushUndoSnapshot();sourceEditor.value=kept.join('\n');project.source=sourceEditor.value;updateLineNumbers();renderFromSource({fit:false,markDirty:false});setDirty(true);persistLayoutSoon();toast(removed===1?'Selected objects disconnected.':`${removed} connections removed.`,'success');return true;
+}
+function reverseSelectedArrows(){
+    if(!['flowchart','dfd'].includes(project.diagramType)){
+        toast('Reverse arrows is available for flowcharts and DFDs.','error');return false;
+    }
+    const chosenNodes=new Set(selectedNodeSequence().map(node=>String(node.key)));
+    const chosenEdges=new Set();
+    selectedItems.forEach(key=>{if(key.startsWith('edge:')){
+        const edge=currentModel.edges.find(item=>item.id===key.slice(5));
+        if(edge){chosenEdges.add(edge.id);for(const id of edge.originalIds||[])chosenEdges.add(id);}
+    }});
+    if(!chosenEdges.size&&chosenNodes.size<2){toast('Select a connection or at least two connected controls.','error');return false;}
+    const nodeKeys=new Map(currentModel.nodes.map(node=>[node.id,String(node.key)]));
+    const requested=new Set();
+    currentModel.edges.forEach(edge=>{
+        const from=nodeKeys.get(edge.from),to=nodeKeys.get(edge.to);
+        if((chosenEdges.has(edge.id)||(edge.originalIds||[]).some(id=>chosenEdges.has(id)))||(from&&to&&chosenNodes.has(from)&&chosenNodes.has(to))){
+            if(from&&to)requested.add(from+'\u0000'+to);
+            if(edge.bidirectional&&from&&to)requested.add(to+'\u0000'+from);
+        }
+    });
+    const lines=sourceEditor.value.replace(/\r/g,'').split('\n');let changed=0;
+    const edited=lines.map(line=>{
+        const source=stripLineComment(line).trim(),arrow=parseArrowLine(source);
+        if(!arrow||!requested.has(arrow.from+'\u0000'+arrow.to))return line;
+        const indent=(line.match(/^\s*/)||[''])[0];
+        const mark=line.match(/\s*(?:--> |->|=>)\s*/); // replacement retains the link's original caption
+        changed++;
+        return indent+arrow.to+' -> '+arrow.from+(arrow.label?' : '+arrow.label:'');
+    });
+    if(!changed){toast('No selected arrows could be reversed.','error');return false;}
+    pushUndoSnapshot();sourceEditor.value=edited.join('\n');project.source=sourceEditor.value;updateLineNumbers();
+    renderFromSource({fit:false,markDirty:false});setDirty(true);persistLayoutSoon();
+    toast(changed===1?'Arrow reversed.':changed+' arrows reversed.','success');return true;
 }
 function connectSelectedObjects(){
     const nodes=selectedNodeSequence();
@@ -2907,9 +6125,9 @@ function renderInspector(){
     if(runState.active||runState.view){renderRunInspector();return;}
     if(selectedItems.size>1){
         const counts={node:0,edge:0,textbox:0};selectedItems.forEach(key=>{const kind=key.slice(0,key.indexOf(':'));if(Object.prototype.hasOwnProperty.call(counts,kind))counts[kind]++;});const connectionState=selectedConnectionsState(),connectionAction=connectionState.connected?'disconnect-selected':'connect-selected',connectionLabel=connectionState.connected?'Disconnect selected':'Connect selected';
-        inspector.innerHTML=`<div class="info-card"><h3>Multiple selection</h3><div class="info-body"><p class="syntax-help"><strong>${selectedItems.size} items selected</strong><br>${counts.node} objects · ${counts.edge} connections · ${counts.textbox} textboxes</p><div class="mini-actions"><button class="mini-btn" data-inspector-action="${connectionAction}" ${counts.node<2?'disabled title="Select at least two objects"':''}>${connectionLabel}</button><button class="mini-btn" data-inspector-action="delete-selected">Delete selected</button><button class="mini-btn" data-inspector-action="clear-selection">Clear selection</button></div></div></div><div class="info-card"><h3>Selection</h3><div class="info-body syntax-help">Hold <strong>Shift</strong> while clicking objects, textboxes or connections to add or remove them from the selection. <strong>${connectionLabel}</strong> updates the connections between the selected objects in selection order and updates Diagram Source. Drag any selected object to move all selected movable objects together.</div></div>`;
+        inspector.innerHTML=`<div class="info-card"><h3>Multiple selection</h3><div class="info-body"><p class="syntax-help"><strong>${selectedItems.size} items selected</strong><br>${counts.node} objects · ${counts.edge} connections · ${counts.textbox} textboxes</p><div class="mini-actions"><button class="mini-btn" data-inspector-action="${connectionAction}" ${counts.node<2?'disabled title="Select at least two objects"':''}>${connectionLabel}</button><button class="mini-btn" data-inspector-action="reverse-arrows" ${counts.edge===0&&counts.node<2?'disabled title="Select a connection or at least two connected objects"':''}>Reverse arrows</button><button class="mini-btn" data-inspector-action="delete-selected">Delete selected</button><button class="mini-btn" data-inspector-action="clear-selection">Clear selection</button></div></div></div><div class="info-card"><h3>Selection</h3><div class="info-body syntax-help">Hold <strong>Shift</strong> while clicking objects, textboxes or connections to add or remove them from the selection. <strong>${connectionLabel}</strong> updates the connections between the selected objects in selection order and updates Diagram Source. Drag any selected object to move all selected movable objects together.</div></div>`;
         refreshRecentColourBlocks();
-    inspector.querySelectorAll('[data-inspector-action]').forEach(button=>button.onclick=()=>{const action=button.getAttribute('data-inspector-action');if(action==='connect-selected')connectSelectedObjects();if(action==='disconnect-selected')disconnectSelectedObjects();if(action==='delete-selected')deleteSelectedDiagramItem();if(action==='clear-selection'){clearSelection();renderDiagram();}});return;
+    inspector.querySelectorAll('[data-inspector-action]').forEach(button=>button.onclick=()=>{const action=button.getAttribute('data-inspector-action');if(action==='connect-selected')connectSelectedObjects();if(action==='disconnect-selected')disconnectSelectedObjects();if(action==='reverse-arrows')reverseSelectedArrows();if(action==='delete-selected')deleteSelectedDiagramItem();if(action==='clear-selection'){clearSelection();renderDiagram();}});return;
     }
     const textBox=selectedTextId&&project.layout.textboxes?project.layout.textboxes[selectedTextId]:null;
     if(textBox){
@@ -3008,6 +6226,12 @@ const CONTROL_DEFINITIONS={
 function controlsForCurrentDiagram(){return CONTROL_DEFINITIONS[project&&project.diagramType]||CONTROL_DEFINITIONS.flowchart;}
 function controlIconHtml(control,showLabelInside=false){
     const cls=escapeAttr(control.icon),extra=control.kind?` data-kind="${escapeAttr(control.kind)}"`:'';
+    if(control.icon==='terminator')return `<svg class="control-icon terminator" viewBox="0 0 78 40" aria-hidden="true"><rect x="2" y="3" width="74" height="34" rx="17" fill="#edf9f1" stroke="#2f7d4d" stroke-width="3"/></svg>`;
+    if(control.icon==='fg-call')return `<svg class="control-icon fg-call" viewBox="0 0 78 40" aria-hidden="true"><rect x="2" y="3" width="74" height="34" fill="#f0e0ff" stroke="#7d608d" stroke-width="3"/><path d="M13 3V37 M65 3V37" fill="none" stroke="#7d608d" stroke-width="2"/><text x="39" y="21" dominant-baseline="middle" text-anchor="middle" fill="#4b305e" font-size="18">ƒ</text></svg>`;
+    if(control.icon==='fg-declare')return `<svg class="control-icon fg-declare" viewBox="0 0 78 40" aria-hidden="true"><rect x="2" y="3" width="74" height="34" fill="#ffffd0" stroke="#8d8d5f" stroke-width="3"/><path d="M15 3V37" stroke="#8d8d5f" stroke-width="3"/></svg>`;
+    if(control.icon==='fg-assign')return `<svg class="control-icon fg-assign" viewBox="0 0 78 40" aria-hidden="true"><rect x="2" y="3" width="74" height="34" fill="#ffffd0" stroke="#8d8d5f" stroke-width="3"/></svg>`;
+    if(control.icon==='fg-input')return `<svg class="control-icon fg-input" viewBox="0 0 78 40" aria-hidden="true"><polygon points="15,3 76,3 63,37 2,37" fill="#b0e0ff" stroke="#466f8a" stroke-width="3" stroke-linejoin="round"/></svg>`;
+    if(control.icon==='fg-output')return `<svg class="control-icon fg-output" viewBox="0 0 78 40" aria-hidden="true"><polygon points="2,3 63,3 76,37 15,37" fill="#d0ffd0" stroke="#5f8f5f" stroke-width="3" stroke-linejoin="round"/></svg>`;
     if(control.icon==='fg-if')return `<svg class="control-icon ${cls}" viewBox="0 0 78 46" aria-hidden="true"><polygon points="39,2 76,23 39,44 2,23" fill="#ffd0d0" stroke="#a07070" stroke-width="3" stroke-linejoin="round"></polygon><text x="39" y="23" dominant-baseline="middle">?</text></svg>`;
     if(control.icon==='fg-loop')return `<svg class="control-icon ${cls}" viewBox="0 0 78 40" aria-hidden="true"><polygon points="12,2 66,2 76,20 66,38 12,38 2,20" fill="#ffe0a0" stroke="#a08040" stroke-width="3" stroke-linejoin="round"></polygon><text x="39" y="20" dominant-baseline="middle">↻</text></svg>`;
     if(control.icon==='fg-for')return `<svg class="control-icon ${cls}" viewBox="0 0 78 40" aria-hidden="true"><polygon points="12,2 66,2 76,20 66,38 12,38 2,20" fill="#ffe0a0" stroke="#a08040" stroke-width="3" stroke-linejoin="round"></polygon><text x="39" y="20" dominant-baseline="middle">i</text></svg>`;
@@ -3028,7 +6252,7 @@ function renderControlPalette(){
     const hint=el('canvasHint');if(hint)hint.textContent=project.diagramType==='flowchart'&&project.sourceType==='flowgorithm'?'Double-click a connector line to insert a Flowgorithm control · Terminal and Stop are available in Controls · moving controls updates Diagram Source positions · Shift-click to multi-select':'Edit the notation on the left · drag nodes to adjust positions · double-click empty canvas to add text · drag the background to pan';
     palette.querySelectorAll('[data-control-type]').forEach(button=>{
         button.addEventListener('click',()=>addControlAtCanvasCentre(button.getAttribute('data-control-type')));
-        button.addEventListener('dragstart',event=>{event.dataTransfer.setData('application/x-charter-control',button.getAttribute('data-control-type'));event.dataTransfer.effectAllowed='copy';});
+        button.addEventListener('dragstart',event=>{event.dataTransfer.setData('application/x-charter-control',button.getAttribute('data-control-type'));event.dataTransfer.setData('application/x-charter-unlinked',event.ctrlKey||event.metaKey?'1':'0');event.dataTransfer.effectAllowed='copy';});
     });
 }
 function nextObjectKey(prefix){const existing=new Set((currentModel.nodes||[]).map(n=>String(n.key||n.label||'').toLowerCase()));let i=1,key;do{key=prefix+i++;}while(existing.has(key.toLowerCase())||sourceEditor.value.toLowerCase().includes(key.toLowerCase()));return key;}
@@ -3094,14 +6318,19 @@ function insertFlowgorithmObjectOnEdge(edge,type,x,y){
     const fromKey=String(edge.fromKey||'Start'),toKey=String(edge.toKey||'End');
     const fromNode=currentModel.nodes.find(n=>n.key===fromKey);
     let key=nextFlowgorithmKey(type);
-    if(type==='assign'&&fromNode&&fromNode.flowKind==='declare'){
-        const stem='Set'+fromNode.key.charAt(0).toUpperCase()+fromNode.key.slice(1);
+    if(type==='assign'&&fromNode&&['declare','assign'].includes(fromNode.flowKind)){
+        const previousVariable=fromNode.flowKind==='declare'?fromNode.key:flowAssignParts(fromNode.sourceValue).variable;
+        const stem=fromNode.flowKind==='assign'?fromNode.key:'Set'+previousVariable.charAt(0).toUpperCase()+previousVariable.slice(1);
         const existing=new Set(currentModel.nodes.map(n=>String(n.key).toLowerCase()));
         key=stem;let suffix=2;while(existing.has(key.toLowerCase()))key=stem+suffix++;
     }
     const variable=(type==='input'||type==='output')?mostRecentFlowVariable(fromNode):'';
     if(variable)key=flowVariableControlName(type,variable);
-    const declaration=type==='assign'&&fromNode&&fromNode.flowKind==='declare'?`assign ${key} ${fromNode.key} = 0`:(variable?`${type} ${key} ${variable}`:flowgorithmDeclarationForType(type,key));
+    let declaration=flowgorithmDeclarationForType(type,key);
+    if(type==='assign'&&fromNode&&fromNode.flowKind==='declare')declaration=`assign ${key} ${fromNode.key} = 0`;
+    else if(type==='assign'&&fromNode&&fromNode.flowKind==='assign')declaration=`assign ${key} ${String(fromNode.sourceValue||'value = 0').trim()}`;
+    else if(type==='input'&&variable)declaration=`input ${key} ${variable} : ${JSON.stringify('Enter a new value for '+variable+':')}`;
+    else if(type==='output'&&variable)declaration=`output ${key} ${variable}`;
     lines.splice(lineIndex,1,`${fromKey} -> ${key}`,`${key} -> ${toKey}`);
     insertFlowgorithmDeclarationIntoLines(lines,declaration);
     setFlowgorithmSourceLines(lines);renderFromSource({fit:false,markDirty:false});
@@ -3233,15 +6462,40 @@ function bottomFixedVerticalEdge(){
     ranked.sort((a,b)=>Number(b.terminal)-Number(a.terminal)||b.y-a.y||Number(a.branch)-Number(b.branch)||b.index-a.index);
     return ranked[0]?.edge||null;
 }
-function addControlAtWorld(type,x,y){
+function flowchartDropEdge(x,y){
+    if(project.diagramType!=='flowchart'||project.sourceType!=='flowgorithm')return null;
+    const selected=selectedItems.size===1?[...selectedItems][0]:null;
+    if(selected&&selected.startsWith('node:')){
+        const nodeId=selected.slice(5),outgoing=currentModel.edges.filter(e=>e.from===nodeId);
+        if(outgoing.length){const target=outgoing.find(e=>{const n=currentModel.nodes.find(v=>v.id===e.to);return n&&['stop','terminal'].includes(n.flowKind);});return target||outgoing[0];}
+    }
+    // Choose the line whose polyline is geometrically nearest to the drop.
+    const distanceToSegment=(px,py,ax,ay,bx,by)=>{const dx=bx-ax,dy=by-ay,den=dx*dx+dy*dy;if(!den)return Math.hypot(px-ax,py-ay);const t=Math.max(0,Math.min(1,((px-ax)*dx+(py-ay)*dy)/den));return Math.hypot(px-ax-dx*t,py-ay-dy*t);};
+    let nearest=null,best=Infinity;
+    currentModel.edges.forEach(edge=>{const a=currentPositions.get(edge.from),b=currentPositions.get(edge.to);if(!a||!b)return;const distance=distanceToSegment(x,y,a.x,a.y,b.x,b.y);if(distance<best){best=distance;nearest=edge;}});
+    return nearest||preferredFlowgorithmEdge();
+}
+function addUnlinkedFlowgorithmControl(type,x,y){
+    const key=nextFlowgorithmKey(type);
+    const declaration=flowgorithmDeclarationForType(type,key);
+    appendFlowgorithmDeclaration(declaration);
+    renderFromSource({fit:false,markDirty:false});
+    const id=stableId('flowgorithm',key),node=currentModel.nodes.find(n=>n.id===id);
+    if(node){const point={x:Number(x)||0,y:Number(y)||0};
+        currentPositions.set(id,point);project.layout.positions[id]=point;
+        project.layout.positionsByKey[nodeLayoutKey(node)]={id,key:node.key,type:node.type,x:point.x,y:point.y};
+        selectItem('node',id,false);
+    }
+    if(isFixedVertical())currentPositions=fixedVerticalPositions(currentModel);
+    syncFlowgorithmVisualPositionsToSource();setDirty(true);renderDiagram();persistLayoutSoon();return id;
+}
+function addControlAtWorld(type,x,y,unlinked=false){
     if(!project)return;
     pushUndoSnapshot();
     if(type==='textbox'){addFloatingTextboxWorldWithoutHistory(x,y);return;}
-    if(isFixedVertical()&&project.sourceType==='flowgorithm'){
-        // In Fixed Vertical, palette drops append to the end of the vertical chain,
-        // independent of the pointer's y coordinate. The automatic layout then
-        // redistributes all controls with uniform row spacing.
-        const edge=bottomFixedVerticalEdge();
+    if(project.diagramType==='flowchart'&&project.sourceType==='flowgorithm'){
+        if(unlinked){addUnlinkedFlowgorithmControl(type,x,y);return;}
+        const edge=flowchartDropEdge(x,y);
         if(edge){insertFlowgorithmObjectOnEdge(edge,type,x,y);return;}
     }
     addSourceControlledObject(type,x,y);
@@ -3288,7 +6542,7 @@ Start -> End
     return`<p class="share-note">${escapeHtml(sourceDescription())}</p>${flowNote}<div class="syntax-help"><code>${escapeHtml(examples[project.sourceType]||examples.qcaa)}</code></div><p class="share-note">Changes render automatically after a short pause. Press <strong>Ctrl+Enter</strong> to render immediately.</p>`;
 }
 function showSyntaxHelp(){showModal('Notation help',syntaxHelpHtml(),'<button class="primary" data-done>Done</button>',false);el('modalRoot').querySelector('[data-done]').onclick=closeModal;}
-function showAbout(){showModal('About Charter','<p class="share-note"><strong>Charter 0.0.2</strong></p><p class="share-note">Charter is a single-page PHP, HTML and JavaScript diagram editor for flowcharts, data-flow diagrams and entity-relationship diagrams. The diagram is generated locally in the browser from the source text.</p><p class="share-note">Shared diagrams are stored in the MySQL or MariaDB database configured in <code>charter-config.php</code>. Anyone with an unguessable editable share link can modify that shared copy. An always-new-session link creates an independent copy for every visitor.</p>','<button class="primary" data-done>Done</button>',false);el('modalRoot').querySelector('[data-done]').onclick=closeModal;}
+function showAbout(){showModal('About Charter','<p class="share-note"><strong>Charter 0.0.3</strong></p><p class="share-note">Charter 0.0.3 supports four diagram types: flowcharts, data-flow diagrams, entity-relationship diagrams and mind maps. Flowcharts, DFDs and ERDs use a text-driven editor; mind maps use a hierarchical visual editor.</p><p class="share-note">Shared diagrams are stored in the MySQL or MariaDB database configured in <code>charter-config.php</code>. Anyone with an unguessable editable share link can modify that shared copy. An always-new-session link creates an independent copy for every visitor.</p>','<button class="primary" data-done>Done</button>',false);el('modalRoot').querySelector('[data-done]').onclick=closeModal;}
 
 async function sendServerRequest(action,payload=null,query={}){const address=new URL(window.location.href);address.search='';address.hash='';address.searchParams.set('charter_action',action);Object.keys(query).forEach(k=>address.searchParams.set(k,query[k]));const options={cache:'no-store'};if(payload!==null){options.method='POST';options.headers={'Content-Type':'application/json'};options.body=JSON.stringify(payload);}const response=await fetch(address.pathname+address.search,options),raw=await response.text();let data;try{data=JSON.parse(raw);}catch(error){throw new Error('The server returned an invalid response. '+raw.slice(0,180));}if(!data.ok)throw new Error(data.error||'The server request failed.');return data;}
 async function loadSharedProject(shareId){el('loadingCover').classList.remove('hidden');try{const data=await sendServerRequest('load',null,{share:shareId});setProject(data.project,{serverShareId:data.shareId,serverShareUrl:data.shareUrl,serverNewSessionUrl:data.newSessionUrl});toast('Shared diagram loaded.','success');}finally{el('loadingCover').classList.add('hidden');}}
@@ -3421,11 +6675,12 @@ function buildCodeScaffold(sql,engine,language){
     if(language==='java')return`public class CharterSchema {\n    public static void main(String[] args) throws Exception {\n        String sql = ${JSON.stringify(sql)};\n        // TODO: open a JDBC connection for ${engine} and execute sql.\n        System.out.println(sql);\n    }\n}\n`;
     return sql;
 }
-function openExportSqlDialog(){
+function openExportSqlDialog(defaultPython=false){
     if(renderTimer){clearTimeout(renderTimer);renderTimer=null;renderFromSource({fit:false,markDirty:false});}
     if(project.diagramType!=='erd'){toast('Export SQL is available for ERD diagrams.','error');return;}
     const body=`<div class="field" style="grid-template-columns:150px minmax(0,1fr)"><label for="sqlEngine">SQL engine</label><select id="sqlEngine"><option value="sqlite">SQLite</option><option value="mysql">MySQL</option><option value="mariadb">MariaDB</option><option value="postgresql">PostgreSQL</option><option value="sqlserver">Microsoft SQL Server</option><option value="oracle">Oracle</option><option value="ansi">ANSI / generic SQL</option></select></div><div class="share-option"><input id="sqlIndexes" type="checkbox" checked><label for="sqlIndexes">Include indexes<small>Create indexes for detected foreign-key fields.</small></label></div><div class="share-option"><input id="sqlOnUpdate" type="checkbox"><label for="sqlOnUpdate">Include ON UPDATE mode<small>Add the selected referential action to generated foreign keys where supported.</small></label></div><div class="field" style="grid-template-columns:150px minmax(0,1fr)"><label for="sqlOnUpdateMode">ON UPDATE</label><select id="sqlOnUpdateMode"><option>CASCADE</option><option>RESTRICT</option><option>SET NULL</option><option>SET DEFAULT</option><option>NO ACTION</option></select></div><div class="share-option"><input id="sqlScaffold" type="checkbox"><label for="sqlScaffold">Include code scaffolding<small>Preview starter code that contains or executes the generated SQL.</small></label></div><div class="field" style="grid-template-columns:150px minmax(0,1fr)"><label for="sqlLanguage">Coding language</label><select id="sqlLanguage"><option value="python">Python</option><option value="php">PHP</option><option value="javascript">JavaScript / Node.js</option><option value="csharp">C#</option><option value="java">Java</option></select></div><label for="sqlPreview" style="display:block;margin:12px 0 6px;font-weight:700">Preview</label><textarea id="sqlPreview" style="min-height:290px;font-family:Consolas,'Courier New',monospace;white-space:pre" spellcheck="false" readonly></textarea>`;
-    const root=showModal('Export SQL',body,`<button data-copy>Copy to clipboard</button><button data-save-sql>Save SQL file</button><button data-save-code>Save code file</button><button class="primary" data-done>Done</button>`,false);
+    const root=showModal(defaultPython?'Export Python':'Export SQL',body,`<button data-copy>Copy to clipboard</button><button data-save-sql>Save SQL file</button><button data-save-code>Save code file</button><button class="primary" data-done>Done</button>`,false);
+    if(defaultPython){el('sqlScaffold').checked=true;el('sqlLanguage').value='python';}
     const controls=['sqlEngine','sqlIndexes','sqlOnUpdate','sqlOnUpdateMode','sqlScaffold','sqlLanguage'].map(el),preview=el('sqlPreview'),saveCode=root.querySelector('[data-save-code]');let currentSql='',currentPreview='';
     function refresh(){const options={engine:el('sqlEngine').value,includeIndexes:el('sqlIndexes').checked,includeOnUpdate:el('sqlOnUpdate').checked,onUpdateMode:el('sqlOnUpdateMode').value};currentSql=buildSqlExport(options);const lang=el('sqlLanguage').value,scaffold=el('sqlScaffold').checked;currentPreview=scaffold?buildCodeScaffold(currentSql,options.engine,lang):currentSql;preview.value=currentPreview;el('sqlOnUpdateMode').disabled=!options.includeOnUpdate;el('sqlLanguage').disabled=!scaffold;saveCode.disabled=!scaffold;saveCode.textContent='Save '+({python:'Python',php:'PHP',javascript:'JavaScript',csharp:'C#',java:'Java'}[lang]||'code')+' file';}
     controls.forEach(control=>{control.onchange=refresh;control.oninput=refresh;});
@@ -3435,7 +6690,7 @@ function openExportSqlDialog(){
     root.querySelector('[data-done]').onclick=closeModal;refresh();
 }
 
-function handleAction(action){closeMenus();if(action==='new-object')openNewObjectDialog();else if(action==='templates')openTemplates();else if(action==='new-flow')newDiagram('flowchart','flowgorithm');else if(action==='new-dfd')newDiagram('dfd','dfd');else if(action==='new-erd')newDiagram('erd','sql');else if(action==='open-json')openJson();else if(action==='save-share')openShareDialog();else if(action==='save-template')openSaveTemplateDialog();else if(action==='save-browser')saveBrowser();else if(action==='browser-projects')browserProjects();else if(action==='download-json')downloadJson();else if(action==='export-svg')exportSvg();else if(action==='export-png')exportPng();else if(action==='export-sql')openExportSqlDialog();else if(action==='export-python')exportCode('python');else if(action==='export-qcaa')exportCode('qcaa');else if(action==='export-gatton')exportCode('gatton');else if(action==='export-javascript')exportCode('javascript');else if(action==='print')window.print();else if(action==='render')renderFromSource({fit:false});else if(action==='run')toggleProgramRun();else if(action==='auto-layout')autoLayout();else if(action==='fit')fitDiagram();else if(action==='toggle-grid'){pushUndoSnapshot();project.settings.showGrid=!project.settings.showGrid;applyGrid();setDirty(true);}else if(action==='toggle-labels'){pushUndoSnapshot();project.settings.showEdgeLabels=!project.settings.showEdgeLabels;renderDiagram();setDirty(true);}else if(action==='zoom-in')zoom(1.2);else if(action==='zoom-out')zoom(.83);else if(action==='toggle-source')setSourcePanelVisible(!isSourcePanelVisible());else if(action==='syntax-help')showSyntaxHelp();else if(action==='about')showAbout();}
+function handleAction(action){closeMenus();if(action==='new-object')openNewObjectDialog();else if(action==='templates')openTemplates();else if(action==='new-flow')newDiagram('flowchart','flowgorithm');else if(action==='new-dfd')newDiagram('dfd','dfd');else if(action==='new-erd')newDiagram('erd','sql');else if(action==='new-mindmap')window.location.href='?mindmap=1&new=1';else if(action==='open-json')openJson();else if(action==='save-share')openShareDialog();else if(action==='save-template')openSaveTemplateDialog();else if(action==='save-browser')saveBrowser();else if(action==='browser-projects')browserProjects();else if(action==='download-json')downloadJson();else if(action==='export-svg')exportSvg();else if(action==='export-png')exportPng();else if(action==='export-sql')openExportSqlDialog();else if(action==='export-python')exportCode('python');else if(action==='export-qcaa')exportCode('qcaa');else if(action==='export-gatton')exportCode('gatton');else if(action==='export-javascript')exportCode('javascript');else if(action==='print')window.print();else if(action==='render')renderFromSource({fit:false});else if(action==='run')toggleProgramRun();else if(action==='auto-layout')autoLayout();else if(action==='fit')fitDiagram();else if(action==='toggle-grid'){pushUndoSnapshot();project.settings.showGrid=!project.settings.showGrid;applyGrid();setDirty(true);}else if(action==='toggle-labels'){pushUndoSnapshot();project.settings.showEdgeLabels=!project.settings.showEdgeLabels;renderDiagram();setDirty(true);}else if(action==='zoom-in')zoom(1.2);else if(action==='zoom-out')zoom(.83);else if(action==='toggle-source')setSourcePanelVisible(!isSourcePanelVisible());else if(action==='syntax-help')showSyntaxHelp();else if(action==='about')showAbout();}
 document.querySelectorAll('[data-action]').forEach(button=>button.addEventListener('click',event=>{event.stopPropagation();handleAction(button.getAttribute('data-action'));}));
 
 function isSourcePanelVisible(){return !document.body.classList.contains('source-panel-hidden');}
@@ -3464,7 +6719,7 @@ function initialiseSidePanelResize(){
 
 sourceEditor.addEventListener('beforeinput',()=>beginGroupedUndo('source'));sourceEditor.addEventListener('input',()=>{updateLineNumbers();clearTimeout(renderTimer);renderTimer=setTimeout(()=>renderFromSource({fit:false}),450);});sourceEditor.addEventListener('scroll',()=>lineNumbers.scrollTop=sourceEditor.scrollTop);sourceEditor.addEventListener('keydown',event=>{if(event.key==='Tab'){event.preventDefault();beginGroupedUndo('source');const start=sourceEditor.selectionStart,end=sourceEditor.selectionEnd;sourceEditor.setRangeText('  ',start,end,'end');sourceEditor.dispatchEvent(new Event('input'));}if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();renderFromSource({fit:false});}});
 el('diagramTitle').addEventListener('beforeinput',()=>beginGroupedUndo('title'));el('diagramTitle').addEventListener('input',()=>{project.title=el('diagramTitle').value;setDirty(true);});
-el('diagramType').addEventListener('change',()=>{const type=el('diagramType').value;refreshSourceTypeOptions();const sourceType=el('sourceType').value;newDiagram(type,sourceType);});
+el('diagramType').addEventListener('change',()=>{const type=el('diagramType').value;if(type==='mindmap'){window.location.href='?mindmap=1&new=1';return;}refreshSourceTypeOptions();const sourceType=el('sourceType').value;newDiagram(type,sourceType);});
 el('sourceType').addEventListener('change',()=>{const type=el('diagramType').value,sourceType=el('sourceType').value;if(type==='flowchart')switchFlowchartSourceType(sourceType);else newDiagram(type,sourceType);});
 el('direction').addEventListener('change',()=>{pushUndoSnapshot();project.direction=el('direction').value;if(isFixedVertical())stripFixedVerticalLayoutSource();project.layout.positions={};project.layout.positionsByKey={};renderFromSource({forceLayout:true,fit:true});captureCurrentLayout(false);setDirty(true);persistLayoutSoon();});
 el('lineType').addEventListener('change',()=>{pushUndoSnapshot();project.settings.lineType=el('lineType').value;renderDiagram();setDirty(true);});
@@ -3484,6 +6739,61 @@ document.addEventListener('keydown',event=>{if(event.key==='Escape'&&runState.ac
 
 async function initialise(){initialiseSourcePanelResize();initialiseSidePanelResize();setProject(INITIAL_PROJECT);setSourcePanelVisible(REQUESTED_SOURCE_VISIBILITY==='show'||(REQUESTED_SOURCE_VISIBILITY!=='hide'&&window.innerWidth>820));if(INITIAL_NEW_SESSION_ID){try{await createNewSession(INITIAL_NEW_SESSION_ID);}catch(error){toast(error.message,'error');}}else if(INITIAL_SHARE_ID){try{await loadSharedProject(INITIAL_SHARE_ID);}catch(error){toast(error.message,'error');}}}
 initialise();
+})();
+</script>
+<script>
+/* Common Charter 0.0.3 panel management for flowcharts, DFDs, ERDs and mind maps. */
+(()=>{
+ 'use strict';
+ const map={settings:document.getElementById('charterSettingsPanel'),source:document.getElementById('sourcePanel'),controls:document.getElementById('controlsPanel')||document.querySelector('.left-panel'),inspector:document.getElementById('inspectorPanel')||document.getElementById('rightPanel'),canvas:document.getElementById('canvasShell')};
+ const workspace=document.querySelector('.workspace');
+ if(!workspace||!map.settings)return;
+ const mind=!!document.getElementById('mapSvg');
+ const defaults=mind?{settings:44,source:0,controls:220,inspector:304}:{settings:44,source:390,controls:190,inspector:270};
+ const sizes={...defaults};
+ const hidden=new Set(mind?['source']:[]);
+ function refresh(){
+   for(const [key,node] of Object.entries(map))if(node)node.classList.toggle('charter-view-hidden',hidden.has(key));
+   document.documentElement.style.setProperty('--charter-settings-height',hidden.has('settings')?'0px':sizes.settings+'px');
+   const parts=mind?['controls','canvas','inspector']:['source','controls','canvas','inspector'];
+   const widths=parts.map(k=>hidden.has(k)?'0px':k==='canvas'?'minmax(0,1fr)':sizes[k]+'px');
+   workspace.style.setProperty('grid-template-columns',widths.join(' '),'important');
+   for(const button of document.querySelectorAll('[data-charter-view]')){
+      const k=button.dataset.charterView;
+      button.textContent=(hidden.has(k)?'□ ':'✓ ')+({settings:'Diagram settings',source:'Diagram source',controls:mind?'Navigator / Outline':'Controls',inspector:'Inspector',canvas:'Canvas'}[k]||k);
+   }
+   window.dispatchEvent(new Event('resize'));
+ }
+ function reset(){Object.assign(sizes,defaults);hidden.clear();if(mind)hidden.add('source');
+    document.body.classList.remove('source-panel-hidden');
+    for(const key of ['sourcePanelWidth','controlsPanelWidth','inspectorPanelWidth'])try{localStorage.removeItem('charter.'+key)}catch(_){}
+    document.documentElement.style.removeProperty('--source-width');document.documentElement.style.removeProperty('--controls-width');document.documentElement.style.removeProperty('--inspector-width');
+    refresh();}
+ function addGrip(node,edge,key,isY=false){if(!node)return;
+   if(getComputedStyle(node).position==='static')node.style.position='relative';
+   const grip=document.createElement('div');grip.className=isY?'charter-toolbar-grip':'charter-panel-grip'+(edge==='left'?' left-edge':'');grip.title='Drag to resize; double-click to reset all panels';node.appendChild(grip);
+   let start=null;
+   grip.addEventListener('pointerdown',e=>{if(e.button!==0)return;e.preventDefault();e.stopPropagation();start={pointerId:e.pointerId,pos:isY?e.clientY:e.clientX,size:sizes[key]};grip.setPointerCapture(e.pointerId)});
+   grip.addEventListener('pointermove',e=>{if(!start||e.pointerId!==start.pointerId)return;const delta=(isY?e.clientY:e.clientX)-start.pos;sizes[key]=Math.round(Math.max(isY?34:140,Math.min(isY?240:900,start.size+delta*(edge==='left'?-1:1))));refresh()});
+   grip.addEventListener('pointerup',()=>{start=null});grip.addEventListener('pointercancel',()=>{start=null});
+   grip.addEventListener('dblclick',e=>{e.stopPropagation();reset()});
+ }
+ addGrip(map.settings,'bottom','settings',true);
+ if(mind){addGrip(map.controls,'right','controls');addGrip(map.inspector,'left','inspector')}
+ // Existing Charter source/controls/inspector panels already have their own width handles.
+ for(const node of Object.values(map))if(node)node.addEventListener('dblclick',e=>{
+   if(e.target.closest('input,textarea,select,button,svg,[contenteditable],.node,.diagram-node'))return;
+   if(e.target.closest('.panel-head,.panel-header,.charter-toolbar-grip,.charter-panel-grip'))reset();
+ });
+ document.addEventListener('click',e=>{
+   const toggle=e.target.closest('[data-charter-view]');
+   if(toggle){e.preventDefault();e.stopImmediatePropagation();const key=toggle.dataset.charterView;if(hidden.has(key))hidden.delete(key);else hidden.add(key);if(key==='source')document.body.classList.toggle('source-panel-hidden',hidden.has('source'));refresh();return}
+   if(e.target.closest('[data-charter-reset]')){e.preventDefault();e.stopImmediatePropagation();reset()}
+ },true);
+ if(!mind){const previous=document.querySelector('[data-action="toggle-source"]');if(previous)previous.addEventListener('click',()=>{setTimeout(()=>{if(document.body.classList.contains('source-panel-hidden'))hidden.add('source');else hidden.delete('source');refresh()},0)})}
+ // Do not overwrite URL-driven source visibility.
+ if(!mind){const hiddenSource=document.body.classList.contains('source-panel-hidden')||new URLSearchParams(location.search).get('source')==='hide';if(hiddenSource)hidden.add('source')}
+ refresh();
 })();
 </script>
 </body>
