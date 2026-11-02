@@ -1,65 +1,96 @@
 <?php
-/* Charter 0.0.3: fourth diagram type, Mind Map. The original MindCanvas editor
+/* Charter 0.0.4: fourth diagram type, Mind Map. The original MindCanvas editor
  * runs under this router, sharing Charter's configuration and PHP entrypoint. */
 
-/** Charter 0.0.3 unified schema bootstrap. Idempotent on each request. */
+/** Charter 0.0.4 unified schema bootstrap. Idempotent on each request. */
 function charter_schema_bootstrap($db) {
-    static $ready = false;
-    if ($ready) return;
-    $statements = array(
-        "CREATE TABLE IF NOT EXISTS charter_projects (share_key CHAR(32) NOT NULL PRIMARY KEY,title VARCHAR(255) NOT NULL,project_json LONGTEXT NOT NULL,created_at DATETIME NOT NULL,updated_at DATETIME NOT NULL,KEY idx_charter_updated(updated_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
-        "CREATE TABLE IF NOT EXISTS charter_templates (template_key CHAR(32) NOT NULL PRIMARY KEY,title VARCHAR(255) NOT NULL,description VARCHAR(500) NOT NULL,diagram_type VARCHAR(30) NOT NULL DEFAULT 'flowchart',source_type VARCHAR(30) NOT NULL DEFAULT 'flowgorithm',project_json LONGTEXT NOT NULL,created_at DATETIME NOT NULL,KEY idx_charter_template_created(created_at),KEY idx_charter_template_type(diagram_type)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
-    );
-    foreach ($statements as $sql) {
-        if (!$db->query($sql)) throw new RuntimeException('Charter automatic database setup failed: '.$db->error);
-    }
-    // Apply only additive changes to already-existing shared Charter tables.
-    $required = array(
-        'charter_projects' => array('title'=>"VARCHAR(255) NOT NULL DEFAULT ''",'project_json'=>'LONGTEXT','created_at'=>'DATETIME NULL','updated_at'=>'DATETIME NULL'),
-        'charter_templates' => array('title'=>"VARCHAR(255) NOT NULL DEFAULT ''",'description'=>"VARCHAR(500) NOT NULL DEFAULT ''",'diagram_type'=>"VARCHAR(30) NOT NULL DEFAULT 'flowchart'",'source_type'=>"VARCHAR(30) NOT NULL DEFAULT 'flowgorithm'",'project_json'=>'LONGTEXT','created_at'=>'DATETIME NULL')
-    );
-    foreach ($required as $table => $columns) {
-        $known = array();
-        $result = $db->query('SHOW COLUMNS FROM `'.$table.'`');
-        if (!$result) throw new RuntimeException('Could not inspect Charter schema: '.$db->error);
-        while ($item=$result->fetch_assoc()) $known[$item['Field']] = true;
-        $result->free();
-        foreach ($columns as $column=>$type) if (!isset($known[$column])) {
-            if (!$db->query('ALTER TABLE `'.$table.'` ADD COLUMN `'.$column.'` '.$type)) throw new RuntimeException('Charter schema update failed: '.$db->error);
-        }
-    }
-    $indexes = array(
-        'charter_projects'=>array('idx_charter_updated'=>'updated_at'),
-        'charter_templates'=>array('idx_charter_template_created'=>'created_at','idx_charter_template_type'=>'diagram_type')
-    );
-    foreach ($indexes as $table=>$indexFields) {
-        $result=$db->query('SHOW INDEX FROM `'.$table.'`');
-        if (!$result) throw new RuntimeException('Could not inspect Charter indexes: '.$db->error);
-        $existing=array();while($item=$result->fetch_assoc())$existing[$item['Key_name']]=true;
-        $result->free();
-        foreach($indexFields as $index=>$field)if(!isset($existing[$index])) {
-            if(!$db->query('CREATE INDEX `'.$index.'` ON `'.$table.'` (`'.$field.'`)'))throw new RuntimeException('Charter index update failed: '.$db->error);
-        }
-    }
-    $ready=true;
+    // Deliberately disabled for version 0.0.4: this application contains live data.
+    // Database migrations require separate review and explicit administrator approval.
+    throw new RuntimeException('Automatic database schema changes are disabled on live data.');
 }
+
 function charter_auto_connect($host,$name,$user,$password) {
     mysqli_report(MYSQLI_REPORT_OFF);
     $db = @new mysqli($host,$user,$password,$name);
     if ($db->connect_errno) {
-        // Database creation is attempted only when the configured name is a safe SQL identifier.
-        if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/D', (string)$name)) throw new RuntimeException('Database connection failed; invalid database name for automatic creation.');
-        $server = @new mysqli($host,$user,$password);
-        if ($server->connect_errno) throw new RuntimeException('Database connection failed: '.$server->connect_error);
-        if (!$server->query('CREATE DATABASE IF NOT EXISTS `'.$name.'` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci') || !$server->select_db($name)) {
-            $message=$server->error; $server->close(); throw new RuntimeException('Could not create/select Charter database: '.$message);
-        }
-        $db=$server;
+        throw new RuntimeException('Database connection failed. Live-data protection: Charter will not create databases automatically.');
     }
     if (!$db->set_charset('utf8mb4')) throw new RuntimeException('Could not set UTF-8 charset: '.$db->error);
-    charter_schema_bootstrap($db);
+    // Live-data protection: no CREATE/ALTER/INDEX statements on requests.
     return $db;
 }
+
+/* Read-only startup validation. No database/schema writes happen here. */
+function charter_required_table_definitions() {
+    return array(
+        'charter_projects' => "CREATE TABLE `charter_projects` (share_key CHAR(32) NOT NULL PRIMARY KEY,title VARCHAR(255) NOT NULL,project_json LONGTEXT NOT NULL,created_at DATETIME NOT NULL,updated_at DATETIME NOT NULL,KEY idx_charter_updated(updated_at)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+        'charter_templates' => "CREATE TABLE `charter_templates` (template_key CHAR(32) NOT NULL PRIMARY KEY,title VARCHAR(255) NOT NULL,description VARCHAR(500) NOT NULL,diagram_type VARCHAR(30) NOT NULL DEFAULT 'flowchart',source_type VARCHAR(30) NOT NULL DEFAULT 'flowgorithm',project_json LONGTEXT NOT NULL,created_at DATETIME NOT NULL,KEY idx_charter_template_created(created_at),KEY idx_charter_template_type(diagram_type)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+}
+function charter_setup_escape($value) {
+    return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
+}
+function charter_startup_check() {
+    require(__DIR__ . DIRECTORY_SEPARATOR . 'charter-config.php');
+    if (!extension_loaded('mysqli')) throw new RuntimeException('MySQLi is required.');
+    $db = charter_auto_connect($dbHost, $dbName, $dbUser, $dbPassword);
+    $definitions = charter_required_table_definitions();
+    $missing = array();
+    foreach ($definitions as $name => $sql) {
+        $stmt = $db->prepare('SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?');
+        if (!$stmt || !$stmt->bind_param('s', $name) || !$stmt->execute()) {
+            throw new RuntimeException('Unable to inspect database tables.');
+        }
+        $count = 0;
+        $stmt->bind_result($count);
+        $stmt->fetch();
+        $stmt->close();
+        if ((int)$count === 0) $missing[] = $name;
+    }
+    if (!$missing) { $db->close(); return; }
+
+    if (session_status() === PHP_SESSION_NONE) session_start();
+    if (empty($_SESSION['charter_setup_csrf'])) {
+        $_SESSION['charter_setup_csrf'] = bin2hex(random_bytes(24));
+    }
+    $error = '';
+    if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['charter_install_missing'])) {
+        $submittedToken = isset($_POST['charter_setup_csrf']) ? (string)$_POST['charter_setup_csrf'] : '';
+        $submittedPassword = isset($_POST['charter_admin_password']) ? (string)$_POST['charter_admin_password'] : '';
+        if (!hash_equals($_SESSION['charter_setup_csrf'], $submittedToken)) {
+            $error = 'The setup form expired. Reload the page and try again.';
+        } elseif (!isset($adminPassword) || $adminPassword === '' || $adminPassword === 'CHANGE_THIS_ADMIN_PASSWORD') {
+            $error = 'Set a secure $adminPassword in charter-config.php before installing tables.';
+        } elseif (!hash_equals((string)$adminPassword, $submittedPassword)) {
+            $error = 'Incorrect administrator password. No changes were made.';
+        } else {
+            // Explicit authenticated request only; never alter or delete an existing table.
+            foreach ($missing as $name) {
+                if (!$db->query($definitions[$name])) {
+                    $error = 'Failed to create ' . $name . ': ' . $db->error;
+                    break;
+                }
+            }
+            if ($error === '') {
+                $db->close();
+                unset($_SESSION['charter_setup_csrf']);
+                header('Location: ' . (isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : 'charter.php'), true, 303);
+                exit;
+            }
+        }
+    }
+    $db->close();
+    http_response_code(503);
+    header('Content-Type: text/html; charset=utf-8');
+    header('Cache-Control: no-store');
+    echo '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Charter database setup required</title><style>body{font:16px/1.55 system-ui,Arial,sans-serif;background:#f2f4f7;color:#202631;margin:0;padding:40px 18px}main{max-width:650px;margin:auto;padding:28px;background:white;border:1px solid #dce1e8;border-radius:12px}label{display:block;margin:16px 0 6px;font-weight:600}input{box-sizing:border-box;width:100%;padding:11px;border:1px solid #aab5c4;border-radius:5px}button{background:#243750;color:white;border:0;border-radius:5px;padding:12px 18px;margin-top:18px;cursor:pointer}.error{color:#a21818}code{background:#edf1f6;padding:2px 4px}li{margin-bottom:4px}</style></head><body><main><h1>Database setup required</h1><p>Charter has detected missing tables in its configured database. <strong>No schema changes have been made automatically.</strong></p><p>Missing tables:</p><ul>';
+    foreach ($missing as $name) echo '<li><code>' . charter_setup_escape($name) . '</code></li>';
+    echo '</ul><p>To create only the missing tables, enter the administrator password (<code>$adminPassword</code>, set in <code>charter-config.php</code>) and select Create missing tables. Existing tables and their data will not be modified.</p>';
+    if ($error !== '') echo '<p class="error" role="alert">' . charter_setup_escape($error) . '</p>';
+    echo '<form method="post"><input type="hidden" name="charter_setup_csrf" value="' . charter_setup_escape($_SESSION['charter_setup_csrf']) . '"><input type="hidden" name="charter_install_missing" value="1"><label for="charter_admin_password">Administrator password</label><input type="password" id="charter_admin_password" name="charter_admin_password" required autocomplete="current-password"><button type="submit">Create missing tables</button></form></main></body></html>';
+    exit;
+}
+charter_startup_check();
 
 if (isset($_GET['mindmap']) || (isset($_GET['new']) && $_GET['new'] === 'mindmap') || (isset($_GET['diagram']) && $_GET['diagram'] === 'mindmap')) {
 ?>
@@ -1281,6 +1312,7 @@ a{color:inherit}.landing-top{background:linear-gradient(180deg,var(--navy),var(-
 .section-title{display:flex;align-items:end;justify-content:space-between;gap:14px;margin:30px 0 12px}.section-title h2{margin:0;font-size:22px}.section-title span{color:var(--muted);font-size:13px}.template-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(245px,1fr));gap:14px}.template-card{display:flex;flex-direction:column;min-height:185px;background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:17px;box-shadow:0 2px 8px rgba(27,38,49,.07)}.template-card:hover{transform:translateY(-1px);box-shadow:0 5px 15px rgba(27,38,49,.12)}
 .template-category{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#a75d00;font-weight:750}.template-card h3{margin:7px 0 8px;font-size:18px}.template-card p{margin:0 0 15px;color:var(--muted);line-height:1.45;flex:1}.template-card a{align-self:flex-start;text-decoration:none;border:1px solid #b9c2cb;border-radius:5px;padding:7px 11px;background:#f8fafb;font-weight:650}.template-card a:hover{background:#edf2f6}.notice{padding:12px 14px;border:1px solid #e0b9b5;border-radius:6px;background:#fff7f6;color:#8a2d25;margin:14px 0}.empty{padding:18px;background:#fff;border:1px dashed var(--line);border-radius:7px;color:var(--muted)}
 @media(max-width:700px){.hero{grid-template-columns:1fr}.blank-button{justify-self:start}.hero h1{font-size:28px}}
+.charter-v004-divider{position:absolute;z-index:24;width:7px;cursor:col-resize;background:transparent;touch-action:none}.charter-v004-divider:hover,.charter-v004-divider:active{background:rgba(33,125,197,.25)}.workspace{position:relative}.charter-view-hidden{display:none!important}
 </style>
 </head>
 <body>
@@ -1426,6 +1458,12 @@ kbd { font-size:11px; color:#65717d; background:#f1f3f5; border:1px solid #d5d9d
 .field:last-child { margin-bottom:0; }
 .field label { color:#586570; font-size:12px; }
 .field input[type=text],.field input[type=number],.field select,.field textarea { width:100%; border:1px solid #bcc5ce; border-radius:4px; padding:5px 6px; background:#fff; min-width:0; }
+.field .multiline-field{display:grid!important;grid-template-columns:minmax(0,1fr) 30px!important;align-items:start;column-gap:5px;width:100%!important;min-width:0;max-width:100%;grid-column:2;box-sizing:border-box}
+.field .multiline-field>textarea{display:block!important;grid-column:1!important;width:100%!important;max-width:100%!important;min-width:0!important;height:31px;min-height:31px;resize:none;overflow:hidden;white-space:pre-wrap;box-sizing:border-box}
+.field .multiline-field>.multiline-toggle{display:flex!important;grid-column:2!important;grid-row:1!important;align-items:center;justify-content:center;width:30px!important;min-width:30px!important;height:31px!important;min-height:31px!important;padding:2px!important;box-sizing:border-box}
+.field .multiline-field>.multiline-toggle[hidden]{display:none!important}
+.field .multiline-field:has(>.multiline-toggle[hidden]){grid-template-columns:minmax(0,1fr)!important}
+.field .multiline-field>textarea[rows]:not([rows="1"]){height:110px;min-height:110px;resize:vertical;overflow:auto}
 .field input[type=color] { width:38px; height:28px; border:1px solid #bcc5ce; border-radius:4px; padding:1px; background:#fff; }
 .field input[type=range] { width:100%; }
 .inline-controls { display:flex; gap:4px; flex-wrap:wrap; }
@@ -2977,7 +3015,7 @@ function showPrompt(title,label,value,onSave){const root=showModal(title,`<label
 function showTextModal(title,help,value,onSave){const root=showModal(title,`<p>${escapeHtml(help)}</p><textarea id="modalText"></textarea>`,`<button data-cancel>Cancel</button><button class="primary" data-save>Save</button>`);el('modalText').value=value;root.querySelector('[data-cancel]').onclick=closeModal;root.querySelector('[data-save]').onclick=()=>{const v=el('modalText').value;closeModal();onSave(v);};setTimeout(()=>el('modalText').focus());}
 function showProjectListModal(title,list,onOpen,onDelete){const html=list.length?`<div class="project-list">${list.map(item=>`<div class="project-item"><div><div class="project-name">${escapeHtml(item.title||item.filename)}</div><div class="project-date">${item.modified?new Date(item.modified).toLocaleString():'Unknown date'}</div></div><button data-open="${escapeAttr(item.filename)}">Open</button><button data-delete="${escapeAttr(item.filename)}">Delete</button></div>`).join('')}</div>`:'<p>No saved projects were found.</p>';const root=showModal(title,html);root.querySelectorAll('[data-open]').forEach(b=>b.onclick=async()=>{try{await onOpen(b.dataset.open);}catch(e){toast(e.message,'error');}});root.querySelectorAll('[data-delete]').forEach(b=>b.onclick=()=>showConfirm('Delete project?',`Delete ${b.dataset.delete}?`,async()=>{try{await onDelete(b.dataset.delete);}catch(e){toast(e.message,'error');}}));}
 function showHelp(){showModal('Keyboard shortcuts',`<div class="help-grid"><kbd>F2</kbd><span>Edit node text</span><kbd>Tab / Insert</kbd><span>Create a child node</span><kbd>Enter</kbd><span>Create a sibling node</span><kbd>Delete / Backspace</kbd><span>Delete selected branch</span><kbd>Arrow keys</kbd><span>Navigate between nearby nodes</span><kbd>Ctrl+Z / Ctrl+Y</kbd><span>Undo / redo</span><kbd>Ctrl+C / X / V</kbd><span>Copy / cut / paste branch</span><kbd>Ctrl+O</kbd><span>Open JSON project</span><kbd>Ctrl+S</kbd><span>Open the share-link window</span><kbd>Ctrl+K</kbd><span>Edit node URLs</span><kbd>Ctrl+F</kbd><span>Find nodes</span><kbd>Ctrl+P</kbd><span>Print map</span></div>`);}
-function showAbout(){showModal('About MindCanvas',`<p>MindCanvas is a single-page PHP, HTML and JavaScript mind-map editor designed to read and write the hierarchical JSON project format used by MindMapMaker-style applications.</p><p>Projects remain in your browser unless you explicitly download them or choose Save and share. Shared maps are stored in the MySQL/MariaDB database configured in <code>charter-config.php</code> and are editable by anyone who has the unguessable share link.</p><p><strong>Compatibility:</strong> imported node trees, IDs, style data, layout offsets, images, attachments, URLs, drawing data and cross-node connections are preserved when the project is exported again.</p>`);}
+function showAbout(){showModal('About MindCanvas',`<p>MindCanvas is a single-page PHP, HTML and JavaScript mind-map editor designed to read and write the hierarchical JSON project format used by MindMapMaker-style applications.</p><p>Projects remain in your browser unless you explicitly download them or choose Save and share. Shared maps are stored in the MySQL/MariaDB database configured in <code>charter-config.php</code> and are editable by anyone who has the unguessable share link.</p><p><strong>Compatibility:</strong> imported node trees, IDs, style data, layout offsets, images, attachments, URLs, drawing data and cross-node connections are preserved when the project is exported again.</p><p>Copyright (c) 2026 Simon Walker &amp; Timothy Lever, Queensland Department of Education</p><p><a href="https://github.com/simonnjwalker/charter" target="_blank" rel="noopener noreferrer">https://github.com/simonnjwalker/charter</a></p>`);}
 function toast(message,type=''){const t=document.createElement('div');t.className=`toast ${type}`;t.textContent=message;el('toastStack').appendChild(t);setTimeout(()=>t.remove(),3500);}
 
 function handleKeyboard(e){
@@ -3028,7 +3066,7 @@ initialiseApplication();
 })();
 </script>
 <script>
-/* Common Charter 0.0.3 panel management for flowcharts, DFDs, ERDs and mind maps. */
+/* Common Charter 0.0.4 panel management for flowcharts, DFDs, ERDs and mind maps. */
 (()=>{
  'use strict';
  const map={settings:document.getElementById('charterSettingsPanel'),source:document.getElementById('sourcePanel'),controls:document.getElementById('controlsPanel')||document.querySelector('.left-panel'),inspector:document.getElementById('inspectorPanel')||document.getElementById('rightPanel'),canvas:document.getElementById('canvasShell')};
@@ -3088,7 +3126,7 @@ initialiseApplication();
 <?php
 /*
  * Charter - single-file diagram editor for flowcharts, DFDs, ERDs and MindCanvas mind maps.
- * Application version 0.0.3
+ * Application version 0.0.4
  * -------------------------
  *
  * Keep charter-config.php in the same directory as this file.
@@ -3259,6 +3297,7 @@ function charter_project_key_exists($mysqli, $shareKey)
         throw new RuntimeException('The share-key parameter could not be bound.');
     }
     charter_database_execute($statement);
+    $foundKey = null;
     if (!$statement->bind_result($foundKey)) {
         throw new RuntimeException('The share-key result could not be read.');
     }
@@ -3277,6 +3316,7 @@ function charter_template_key_exists($mysqli, $templateKey)
         throw new RuntimeException('The template-key parameter could not be bound.');
     }
     charter_database_execute($statement);
+    $foundKey = null;
     if (!$statement->bind_result($foundKey)) {
         throw new RuntimeException('The template-key result could not be read.');
     }
@@ -3716,6 +3756,7 @@ function charter_default_dfd_project($fallbackDefinition)
             throw new RuntimeException('The default DFD share key could not be bound.');
         }
         charter_database_execute($statement);
+        $projectJson = null;
         if (!$statement->bind_result($projectJson)) {
             throw new RuntimeException('The default DFD project could not be read.');
         }
@@ -3754,6 +3795,59 @@ function charter_default_dfd_project($fallbackDefinition)
  * ---------------------------------------------------------------------- */
 if ($charterAction !== '') {
     try {
+        if ($charterAction === 'clear_captions' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
+            $body = charter_read_request_body();
+            $password = isset($body['password']) ? (string)$body['password'] : '';
+            if (!isset($adminPassword) || $adminPassword === '' || $adminPassword === 'CHANGE_THIS_ADMIN_PASSWORD' || !charter_secure_equals((string)$adminPassword, $password)) {
+                charter_json_response(array('ok'=>false,'error'=>'Administrator password incorrect or not configured. No changes made.'),403);
+            }
+            if (empty($body['confirmed']) || ($body['confirmText'] ?? '') !== 'CLEAR ALL CAPTIONS') {
+                charter_json_response(array('ok'=>false,'error'=>'Explicit caption removal confirmation required.'),400);
+            }
+            $mysqli = charter_database_connection();
+            $affected = 0;
+            $mysqli->begin_transaction();
+            try {
+                foreach (array('charter_projects'=>array('share_key','project_json'),'charter_templates'=>array('template_key','project_json')) as $table=>$cols) {
+                    $rows = $mysqli->query('SELECT `'.$cols[0].'`, `'.$cols[1].'` FROM `'.$table.'` FOR UPDATE');
+                    if (!$rows) throw new RuntimeException('Cannot inspect '.$table.': '.$mysqli->error);
+                    $updates = array();
+                    while ($row = $rows->fetch_assoc()) {
+                        $data = json_decode($row[$cols[1]],true);
+                        if (!is_array($data) || ($data['diagramType'] ?? '') !== 'flowchart') continue;
+                        $before = json_encode($data);
+                        if (isset($data['source']) && is_string($data['source']) && ($data['sourceType'] ?? '') === 'flowgorithm') {
+                            $lines = explode("\n",$data['source']);
+                            foreach ($lines as &$line) {
+                                if (preg_match('/^\s*(terminal|stop|input|output|declare|assign|if|call|function|while|for|do)\s+[A-Za-z_][\w.-]*/i',$line)) {
+                                    // A caption separator is a colon preceded by whitespace, outside quoted values.
+                                    $quote='';$escape=false;$len=strlen($line);
+                                    for($i=0;$i<$len;$i++) { $c=$line[$i];
+                                        if($escape){$escape=false;continue;}
+                                        if($quote!==''){if($c==='\\'){$escape=true;continue;}if($c===$quote)$quote='';continue;}
+                                        if($c==='"'||$c==="'"){$quote=$c;continue;}
+                                        if($c===':' && $i>0 && ctype_space($line[$i-1])){$line=rtrim(substr($line,0,$i));break;}
+                                    }
+                                } elseif (preg_match('/^\s*[A-Za-z_][\w.-]*\s*(?:->|-->|=>)\s*[A-Za-z_][\w.-]*/',$line)) {
+                                    $line=preg_replace('/\s+:\s*(?:"(?:\\\\.|[^"\\\\])*"|\x27(?:\\\\.|[^\x27\\\\])*\x27|.*)$/','',$line);
+                                }
+                            }unset($line);
+                            $data['source']=implode("\n",$lines);
+                        }
+                        if(isset($data['layout']['links']) && is_array($data['layout']['links']))foreach($data['layout']['links'] as &$link){if(is_array($link)){$link['caption1']='';$link['caption2']='';}}unset($link);
+                        $data['settings']['showCaptions']=false;$data['settings']['showEdgeLabels']=false;
+                        if(json_encode($data)!==$before)$updates[]=array($row[$cols[0]],json_encode($data,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES));
+                    }$rows->free();
+                    $stmt=$mysqli->prepare('UPDATE `'.$table.'` SET `'.$cols[1].'`=? WHERE `'.$cols[0].'`=?');
+                    if(!$stmt)throw new RuntimeException('Cannot prepare caption cleanup: '.$mysqli->error);
+                    foreach($updates as $update){$json=$update[1];$key=$update[0];$stmt->bind_param('ss',$json,$key);if(!$stmt->execute())throw new RuntimeException('Caption cleanup failed: '.$stmt->error);$affected++;}
+                    $stmt->close();
+                }
+                $mysqli->commit();
+            } catch(Throwable $error) {$mysqli->rollback();$mysqli->close();throw $error;}
+            $mysqli->close();
+            charter_json_response(array('ok'=>true,'updatedRecords'=>$affected),200);
+        }
         if ($charterAction === 'load') {
             $shareKey = isset($_GET['share']) ? strtolower(trim((string)$_GET['share'])) : '';
             if (!charter_valid_key($shareKey)) {
@@ -4255,10 +4349,10 @@ if ($showLanding) {
 <title>Charter Diagram Studio</title>
 <style>
 :root{--top:#1d2832;--top2:#131b22;--panel:#f8fafb;--line:#cbd3da;--canvas:#edf1f4;--ink:#1b2731;--muted:#66737f;--blue:#2475a8;--blue-dark:#1b5e88;--accent:#ed981f;--danger:#b33a2f;--shadow:0 4px 18px rgba(0,0,0,.18);--source-width:390px}
-*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden}body{font-family:Inter,"Segoe UI",Arial,sans-serif;color:var(--ink);background:var(--canvas);font-size:14px}button,input,select,textarea{font:inherit}.hidden{display:none!important}.app{height:100%;display:grid;grid-template-rows:48px 45px minmax(0,1fr) 28px}.topbar{display:flex;align-items:center;gap:14px;padding:0 13px;color:#fff;background:linear-gradient(180deg,var(--top),var(--top2));box-shadow:0 1px 5px rgba(0,0,0,.38);z-index:30}.brand{display:flex;align-items:center;gap:8px;font-weight:800;font-size:16px}.brand-mark{width:28px;height:28px;border-radius:7px;background:linear-gradient(145deg,#ffbd52,#e4800c);position:relative}.brand-mark:before{content:"";position:absolute;width:16px;height:3px;left:6px;top:7px;background:#fff;box-shadow:0 6px 0 #fff,0 12px 0 #fff}.brand-mark:after{content:"";position:absolute;width:3px;height:16px;left:12px;top:6px;background:#fff}.menu-strip{display:flex;height:100%}.menu{position:relative}.menu>button{height:100%;border:0;background:transparent;color:#e8edf1;padding:0 10px;cursor:pointer}.menu>button:hover,.menu.open>button{background:rgba(255,255,255,.1)}.dropdown{display:none;position:absolute;top:45px;left:0;min-width:240px;padding:6px;background:#fff;color:var(--ink);border:1px solid #c7ced5;border-radius:5px;box-shadow:var(--shadow);z-index:200}.menu.open .dropdown{display:block}.dropdown button{display:flex;justify-content:space-between;width:100%;border:0;background:transparent;padding:8px 10px;border-radius:4px;text-align:left;color:var(--ink);cursor:pointer}.dropdown button:hover{background:#edf2f6}.dropdown hr{border:0;border-top:1px solid #e1e5e9;margin:5px 0}.nested-menu{position:relative}.nested-menu>button:after{content:'›';font-size:18px;line-height:1}.nested-menu-panel{display:none;position:absolute;left:100%;top:-6px;min-width:220px;padding:6px;background:#fff;border:1px solid #c7ced5;border-radius:5px;box-shadow:var(--shadow);z-index:210}.nested-menu:hover>.nested-menu-panel,.nested-menu:focus-within>.nested-menu-panel{display:block}kbd{font-size:10px;color:#69747f;border:1px solid #d2d7dc;border-bottom-width:2px;border-radius:3px;background:#f1f3f5;padding:1px 4px}.title-wrap{margin-left:auto;display:flex;align-items:center;gap:8px;min-width:200px;max-width:470px;flex:1;justify-content:flex-end}.unsaved-dot{width:8px;height:8px;border-radius:50%;background:#ffb43e;opacity:0}.unsaved-dot.show{opacity:1}#diagramTitle{width:min(100%,350px);background:rgba(255,255,255,.09);color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:4px;padding:6px 9px;outline:none}.toolbar{display:flex;align-items:center;gap:5px;padding:5px 8px;background:#e7ecf0;border-bottom:1px solid #c4ccd3;overflow-x:auto;z-index:20}.toolbar label{font-size:11px;color:#53616d}.toolbar select{height:33px;border:1px solid #b9c3cb;border-radius:4px;background:#fff;padding:0 7px}.tool-btn{height:33px;min-width:34px;border:1px solid transparent;border-radius:4px;background:transparent;color:#26333e;cursor:pointer;padding:0 9px}.tool-btn:hover{background:#fff;border-color:#c4cbd2}.tool-btn:disabled{opacity:.45;cursor:not-allowed}.sep{width:1px;height:27px;background:#c4ccd2;margin:0 4px}.zoom-readout{min-width:49px;text-align:center;font-size:12px;color:#53616d}.workspace{min-height:0;display:grid;grid-template-columns:var(--source-width) var(--controls-width,190px) minmax(320px,1fr) var(--inspector-width,270px)}.panel{min-height:0;background:var(--panel);z-index:10}.source-panel{border-right:1px solid var(--line);display:flex;flex-direction:column;position:relative}.source-resize-handle{position:absolute;top:0;right:-5px;bottom:0;width:10px;cursor:col-resize;z-index:25;background:transparent}.source-resize-handle:hover,.source-resize-handle.active{background:rgba(36,117,168,.18)}.controls-panel{border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden;position:relative}.controls-resize-handle{position:absolute;top:0;right:-5px;bottom:0;width:10px;cursor:col-resize;z-index:25;background:transparent}.controls-resize-handle:hover,.controls-resize-handle.active{background:rgba(36,117,168,.18)}.control-palette{padding:8px;overflow:auto;display:flex;flex-direction:column;gap:7px}.control-item{display:grid;grid-template-columns:42px minmax(0,1fr);gap:8px;align-items:center;width:100%;padding:7px;border:1px solid #cbd3da;border-radius:6px;background:#fff;color:#263640;text-align:left;cursor:grab;user-select:none}.control-item:hover{background:#eef5fa;border-color:#8eb5cf}.control-item:active{cursor:grabbing}.control-palette.flowgorithm-palette{display:block;padding:8px 7px 12px}.flowgorithm-statement-header{background:#a9c9f2;border:1px solid #6187b4;padding:7px 9px;margin-bottom:10px;font-size:12px;color:#172b41}.flowgorithm-groups{display:grid;grid-template-columns:repeat(4,minmax(72px,1fr));gap:8px}.flow-control-group{min-width:0}.flow-control-group-title{text-align:center;font-size:11px;color:#192633;margin:0 0 8px;white-space:nowrap}.flowgorithm-palette .control-item{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:4px;border:0;background:transparent;padding:3px 1px;cursor:grab}.flowgorithm-palette .control-item:hover{background:#f0f4f7;border-color:transparent}.flowgorithm-palette .control-label{display:none}.flowgorithm-palette .control-icon{width:78px;height:34px;font-size:11px;font-weight:500;color:#111}.flowgorithm-palette .control-icon.fg-input{border-width:2px;background:#b0e0ff;border-color:#5080a0;transform:skew(-24deg)}.flowgorithm-palette .control-icon.fg-input span{transform:skew(24deg)}.flowgorithm-palette .control-icon.fg-output{border-width:2px;background:#d0ffd0;border-color:#70a070;transform:skew(-24deg)}.flowgorithm-palette .control-icon.fg-output span{transform:skew(24deg)}.flowgorithm-palette .control-icon.fg-declare{width:78px;height:34px;clip-path:none;border:2px solid #a0a070;background:#ffffd0}.flowgorithm-palette .control-icon.fg-declare:before{content:"";position:absolute;left:8px;top:0;bottom:0;border-left:1px solid #a0a070}.flowgorithm-palette .control-icon.fg-assign{width:78px;height:34px;border:2px solid #a0a070;background:#ffffd0}.flowgorithm-palette .control-icon.fg-if{width:58px;height:34px;border:1px solid #a07070;background:#ffd0d0;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);transform:none;margin-left:0}.flowgorithm-palette .control-icon.fg-if span{transform:none}.flowgorithm-palette .control-icon.fg-call{border:1px solid #9070a0;background:#f0e0ff}.flowgorithm-palette .control-icon.fg-call:before,.flowgorithm-palette .control-icon.fg-call:after{background:#9070a0;width:1px}.flowgorithm-palette .control-icon.fg-loop{border:1px solid #a08040;background:#ffe0a0;clip-path:polygon(14% 0,86% 0,100% 50%,86% 100%,14% 100%,0 50%)}.control-palette.flowgorithm-palette{display:flex;flex-direction:column;gap:8px;padding:8px}.flowgorithm-groups{display:flex;flex-direction:column;gap:10px}.flow-control-group{display:flex;flex-direction:column;gap:5px}.flow-control-group-title{text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.35px;color:#65727d;margin:2px 2px 1px}.flowgorithm-palette .control-item{display:grid;grid-template-columns:84px minmax(0,1fr);gap:8px;align-items:center;justify-content:stretch;width:100%;padding:6px 7px;border:1px solid #d1d8de;border-radius:6px;background:#fff;cursor:grab}.flowgorithm-palette .control-item:hover{background:#f0f4f7;border-color:#9bb6c8}.flowgorithm-palette .control-label{display:block}.flowgorithm-palette .control-label strong{font-size:12px;font-weight:600}.flowgorithm-palette .control-icon{justify-self:center}.control-icon{width:38px;height:31px;display:flex;align-items:center;justify-content:center;position:relative;color:#29485d;font-weight:800}.control-icon.process{border:2px solid #58758a;border-radius:3px;background:#fff}.control-icon.decision{width:27px;height:27px;border:2px solid #c27b18;background:#fff8e8;transform:rotate(45deg);margin-left:5px}.control-icon.decision span{transform:rotate(-45deg)}.control-icon.io{width:34px;height:27px;border:2px solid #3d83b6;background:#eef7ff;transform:skew(-12deg)}.control-icon.terminator{border:2px solid #358d57;border-radius:18px;background:#edf9f1}.control-icon.stop-sign{width:38px;height:38px;border:2px solid #8b2b25;background:#ffd7d3;clip-path:polygon(30% 0,70% 0,100% 30%,100% 70%,70% 100%,30% 100%,0 70%,0 30%)}.control-icon.rounded{border:2px solid #7255a5;border-radius:8px;background:#f6f2ff}.control-icon.dfd-process{border:2px solid #222;border-radius:8px;background:#d3d3d3}.control-icon.entity{border:2px solid #222;background:#d0d0d0;box-shadow:-5px -5px 0 -2px #d0d0d0,-5px -5px 0 0 #222}.control-icon.store{border:2px solid #222;background:#fff}.control-icon.store:before{content:attr(data-kind);width:12px;border-right:2px solid #222;height:100%;display:flex;align-items:center;justify-content:center;font-size:10px}.control-icon.table{border:2px solid #496b83;border-radius:3px;background:linear-gradient(#365d78 0 10px,#fff 10px)}.control-icon.textbox{font-size:22px;border:1px dashed #8a98a3;background:#fff}.control-icon.fg-assign{border:2px solid #a0a070;border-radius:2px;background:#ffffd0}.control-icon.fg-declare{width:34px;height:27px;background:#ffffd0;border:2px solid #a0a070;clip-path:polygon(12% 0,88% 0,100% 50%,88% 100%,12% 100%,0 50%)}.control-icon.fg-input{width:34px;height:27px;border:2px solid #5080a0;background:#b0e0ff;transform:skew(-12deg)}.control-icon.fg-output{width:34px;height:27px;border:2px solid #70a070;background:#d0ffd0;transform:skew(12deg)}.control-icon.fg-if{width:27px;height:27px;border:2px solid #a07070;background:#ffd0d0;transform:rotate(45deg);margin-left:5px}.control-icon.fg-if span{transform:rotate(-45deg)}.control-icon.fg-loop{width:34px;height:27px;border:2px solid #a08040;background:#ffe0a0;clip-path:polygon(14% 0,86% 0,100% 50%,86% 100%,14% 100%,0 50%)}.control-icon.fg-call{border:2px solid #9070a0;background:#f0e0ff}.control-icon.fg-call:before,.control-icon.fg-call:after{content:"";position:absolute;top:0;bottom:0;width:2px;background:#9070a0}.control-icon.fg-call:before{left:7px}.control-icon.fg-call:after{right:7px}.control-icon.fg-comment{border:1px dashed #8c8458;background:#fffde8;font-size:10px;color:#6e6743}.control-label strong{display:block;font-size:12px}.control-label small{display:block;color:#6a7781;font-size:10px;line-height:1.25;margin-top:2px}.right-panel{border-left:1px solid var(--line);overflow:auto;position:relative}.inspector-resize-handle{position:absolute;top:0;left:-5px;bottom:0;width:10px;cursor:col-resize;z-index:25;background:transparent}.inspector-resize-handle:hover,.inspector-resize-handle.active{background:rgba(36,117,168,.18)}.panel-head{height:39px;display:flex;align-items:center;justify-content:space-between;padding:0 10px;background:#e7ebef;border-bottom:1px solid var(--line);font-weight:750;color:#34424e}.source-meta{padding:9px 10px;border-bottom:1px solid var(--line);background:#f5f7f9;color:#5d6a75;font-size:12px;line-height:1.4}.editor-wrap{position:relative;flex:1;min-height:0;background:#17212b}.line-numbers{position:absolute;left:0;top:0;bottom:0;width:43px;padding:11px 7px;color:#72808d;background:#111920;text-align:right;font:13px/1.55 Consolas,"Courier New",monospace;white-space:pre;overflow:hidden;user-select:none;border-right:1px solid #2d3943}.source-editor{position:absolute;inset:0 0 0 43px;width:calc(100% - 43px);height:100%;resize:none;border:0;outline:0;padding:11px 12px;background:#17212b;color:#e4ebf0;caret-color:#ffb33f;tab-size:2;font:13px/1.55 Consolas,"Courier New",monospace;white-space:pre;overflow:auto}.source-footer{padding:7px 9px;border-top:1px solid var(--line);background:#eef2f5}.parse-status{min-height:19px;color:#52616c;font-size:12px}.parse-status.error{color:#a8332a}.canvas-shell{position:relative;min-width:0;min-height:0;overflow:hidden;background-color:var(--canvas);background-image:radial-gradient(#c5ced6 1px,transparent 1px);background-size:20px 20px}.canvas-shell.no-grid{background-image:none}#diagramSvg{width:100%;height:100%;display:block;touch-action:none;cursor:grab;user-select:none}#diagramSvg.panning{cursor:grabbing}.node{cursor:move}.node .body{filter:drop-shadow(0 1px 1px rgba(0,0,0,.17))}.node.selected .selection{display:block}.selection{display:none;fill:none;stroke:#e74c3c;stroke-width:2;stroke-dasharray:6 4;vector-effect:non-scaling-stroke}.edge{fill:none;stroke:#000;stroke-width:3;vector-effect:non-scaling-stroke;pointer-events:none}.edge.hovered{stroke:#e74c3c}.edge.selected{stroke:#e74c3c;stroke-width:3;stroke-dasharray:8 5;animation:edgeMarch .65s linear infinite}@keyframes edgeMarch{to{stroke-dashoffset:-13}}.edge-hit{fill:none;stroke:transparent;stroke-width:16;vector-effect:non-scaling-stroke;pointer-events:stroke;cursor:pointer}.flow-insert-arrow{cursor:pointer}.flow-insert-arrow .flow-insert-halo{fill:#fff;fill-opacity:.96;stroke:#d94138;stroke-width:1.6;vector-effect:non-scaling-stroke}.flow-insert-arrow:hover .flow-insert-halo{fill:#fff1ef;stroke:#b62822;stroke-width:2}.relationship-cardinality{pointer-events:none}.relationship-cardinality.selected line,.relationship-cardinality.selected circle{stroke:#e74c3c}.edge-label{cursor:pointer}.edge-label rect{fill:rgba(255,255,255,.92);stroke:#d2d9df;stroke-width:1}.edge-label.selected rect{stroke:#e74c3c;stroke-width:1.5}.edge-label text{pointer-events:none}.canvas-hint{position:absolute;left:12px;bottom:12px;padding:6px 9px;border:1px solid #c9d1d8;border-radius:4px;background:rgba(255,255,255,.88);color:#64727d;font-size:12px;pointer-events:none}.loading-cover{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(238,242,245,.88);z-index:20;font-size:16px;font-weight:750;color:#435260}.inspector{padding:12px}.empty{padding:30px 16px;text-align:center;color:var(--muted)}.info-card{border:1px solid #d3dae0;border-radius:6px;background:#fff;margin-bottom:11px;overflow:hidden}.info-card h3{font-size:13px;margin:0;padding:9px 10px;background:#edf1f4;border-bottom:1px solid #d7dde2}.info-body{padding:10px}.field{display:grid;grid-template-columns:86px minmax(0,1fr);gap:7px;align-items:center;margin-bottom:8px}.field:last-child{margin-bottom:0}.field label{font-size:11px;color:#5d6a75}.field input,.field select,.field textarea{width:100%;border:1px solid #bcc6ce;border-radius:4px;padding:5px 6px;background:#fff}.field input[type=color]{height:31px;padding:2px}.recent-colours-block{margin-top:8px;padding-top:8px;border-top:1px solid #e0e5e9}.recent-colours-title{font-size:11px;color:#5d6a75;margin-bottom:6px}.recent-colours{display:flex;gap:6px;flex-wrap:wrap;min-height:25px;align-items:center}.recent-colour{width:25px!important;height:25px!important;min-width:25px;padding:0!important;border:1px solid #8f9aa3!important;border-radius:4px!important;box-shadow:inset 0 0 0 1px rgba(255,255,255,.45);cursor:pointer}.recent-colours-empty{font-size:10px;color:#84909a}.format-checks{display:flex;gap:8px;flex-wrap:wrap;font-size:11px;color:#53616d}.format-checks label{display:flex;align-items:center;gap:3px}.format-checks input{width:auto}.floating-text{cursor:move}.floating-text text{pointer-events:none}.floating-text .text-hit{fill:rgba(255,255,255,.001);stroke:none;pointer-events:all}.floating-text .text-selection{display:none;fill:none;stroke:#e74c3c;stroke-width:1.5;stroke-dasharray:5 3;vector-effect:non-scaling-stroke;pointer-events:none}.floating-text.selected .text-selection{display:block}.mini-actions{display:flex;gap:5px;flex-wrap:wrap}.mini-btn{border:1px solid #bec7cf;border-radius:4px;background:#fff;padding:6px 8px;cursor:pointer}.mini-btn:hover{background:#edf2f6}.syntax-help{font-size:12px;line-height:1.5;color:#53616d}.syntax-help code{display:block;white-space:pre-wrap;background:#17212b;color:#dce5eb;padding:8px;border-radius:4px;margin-top:6px;font-family:Consolas,"Courier New",monospace}.statusbar{display:flex;align-items:center;gap:18px;padding:0 10px;background:#dfe5e9;border-top:1px solid #c3cbd2;color:#52606b;font-size:12px}.statusbar .grow{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.modal-backdrop{position:fixed;inset:0;z-index:500;display:flex;align-items:center;justify-content:center;padding:18px;background:rgba(13,20,27,.57)}.modal{display:flex;flex-direction:column;width:min(680px,100%);max-height:min(760px,92vh);background:#fff;border-radius:8px;box-shadow:0 18px 55px rgba(0,0,0,.36);overflow:hidden}.modal.small{width:min(490px,100%)}.modal-head{display:flex;justify-content:space-between;align-items:center;padding:13px 16px;background:#edf1f4;border-bottom:1px solid #cdd4da}.modal-head h2{font-size:17px;margin:0}.modal-close{border:0;background:transparent;font-size:22px;color:#63717d;cursor:pointer}.modal-body{padding:15px 16px;overflow:auto}.modal-foot{display:flex;justify-content:flex-end;gap:8px;padding:10px 16px;border-top:1px solid #d4dae0}.modal button{border:1px solid #b9c2ca;border-radius:4px;background:#fff;padding:7px 12px;cursor:pointer}.modal button.primary{background:var(--blue);border-color:var(--blue-dark);color:#fff}.modal textarea{width:100%;min-height:130px;border:1px solid #b9c3cb;border-radius:5px;padding:8px;resize:vertical}.new-object-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:9px}.new-object-choice{display:grid!important;grid-template-columns:46px minmax(0,1fr);gap:9px;align-items:center;text-align:left!important;padding:10px!important}.new-object-choice strong{display:block}.new-object-choice small{display:block;color:#687582;font-size:11px;margin-top:3px;line-height:1.3}.share-note{color:#5c6974;line-height:1.48}.share-option{display:flex;align-items:flex-start;gap:9px;margin:13px 0;padding:10px;background:#f7f9fa;border:1px solid #d4dae0;border-radius:5px}.share-option input{margin-top:3px}.share-option label{font-weight:700}.share-option small{display:block;margin-top:3px;color:#66737e;font-weight:400;line-height:1.4}.share-link-row{display:flex;gap:7px;margin-top:7px}.share-link-row input{flex:1;min-width:0;border:1px solid #b9c3cb;border-radius:4px;padding:8px;background:#f8fafb}.share-link-row button{background:var(--blue);color:#fff;border-color:var(--blue-dark)}.share-status{min-height:20px;margin-top:8px;color:#5b6974;font-size:13px}.share-status.error{color:#a83228}.toast-stack{position:fixed;right:15px;bottom:41px;z-index:1000;display:flex;flex-direction:column;gap:8px;pointer-events:none}.toast{min-width:230px;max-width:390px;background:#25323c;color:#fff;border-radius:5px;padding:10px 12px;box-shadow:var(--shadow)}.toast.error{background:#9f332a}.toast.success{background:#267346}@media(max-width:1180px){.workspace{grid-template-columns:var(--source-width) min(var(--controls-width,156px),220px) minmax(300px,1fr) 0}.right-panel{visibility:hidden}.tool-label{display:none}}@media(max-width:820px){.workspace{grid-template-columns:126px minmax(280px,1fr)}.source-resize-handle{display:none}.source-panel{position:absolute;left:0;top:93px;bottom:28px;width:min(390px,88vw);transform:translateX(-100%);transition:.2s;box-shadow:3px 0 14px rgba(0,0,0,.2)}.source-panel.mobile-open{transform:translateX(0)}.controls-panel{grid-column:1}.menu-strip{display:none}.title-wrap{min-width:100px}}@media(max-width:560px){.workspace{grid-template-columns:minmax(280px,1fr)}.controls-panel{display:none}}@media print{.topbar,.toolbar,.source-panel,.controls-panel,.right-panel,.statusbar,.canvas-hint{display:none!important}.app,.workspace,.canvas-shell{display:block;width:100%;height:100%;background:#fff}#diagramSvg{width:100vw;height:100vh}}
+*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden}body{font-family:Inter,"Segoe UI",Arial,sans-serif;color:var(--ink);background:var(--canvas);font-size:14px}button,input,select,textarea{font:inherit}.hidden{display:none!important}.app{height:100%;display:grid;grid-template-rows:48px 45px minmax(0,1fr) 28px}.topbar{display:flex;align-items:center;gap:14px;padding:0 13px;color:#fff;background:linear-gradient(180deg,var(--top),var(--top2));box-shadow:0 1px 5px rgba(0,0,0,.38);z-index:30}.brand{display:flex;align-items:center;gap:8px;font-weight:800;font-size:16px}.brand-mark{width:28px;height:28px;border-radius:7px;background:linear-gradient(145deg,#ffbd52,#e4800c);position:relative}.brand-mark:before{content:"";position:absolute;width:16px;height:3px;left:6px;top:7px;background:#fff;box-shadow:0 6px 0 #fff,0 12px 0 #fff}.brand-mark:after{content:"";position:absolute;width:3px;height:16px;left:12px;top:6px;background:#fff}.menu-strip{display:flex;height:100%}.menu{position:relative}.menu>button{height:100%;border:0;background:transparent;color:#e8edf1;padding:0 10px;cursor:pointer}.menu>button:hover,.menu.open>button{background:rgba(255,255,255,.1)}.dropdown{display:none;position:absolute;top:45px;left:0;min-width:240px;padding:6px;background:#fff;color:var(--ink);border:1px solid #c7ced5;border-radius:5px;box-shadow:var(--shadow);z-index:200}.menu.open .dropdown{display:block}.dropdown button{display:flex;justify-content:space-between;width:100%;border:0;background:transparent;padding:8px 10px;border-radius:4px;text-align:left;color:var(--ink);cursor:pointer}.dropdown button:hover{background:#edf2f6}.dropdown hr{border:0;border-top:1px solid #e1e5e9;margin:5px 0}.nested-menu{position:relative}.nested-menu>button:after{content:'›';font-size:18px;line-height:1}.nested-menu-panel{display:none;position:absolute;left:100%;top:-6px;min-width:220px;padding:6px;background:#fff;border:1px solid #c7ced5;border-radius:5px;box-shadow:var(--shadow);z-index:210}.nested-menu:hover>.nested-menu-panel,.nested-menu:focus-within>.nested-menu-panel{display:block}kbd{font-size:10px;color:#69747f;border:1px solid #d2d7dc;border-bottom-width:2px;border-radius:3px;background:#f1f3f5;padding:1px 4px}.title-wrap{margin-left:auto;display:flex;align-items:center;gap:8px;min-width:200px;max-width:470px;flex:1;justify-content:flex-end}.unsaved-dot{width:8px;height:8px;border-radius:50%;background:#ffb43e;opacity:0}.unsaved-dot.show{opacity:1}#diagramTitle{width:min(100%,350px);background:rgba(255,255,255,.09);color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:4px;padding:6px 9px;outline:none}.toolbar{display:flex;align-items:center;gap:5px;padding:5px 8px;background:#e7ecf0;border-bottom:1px solid #c4ccd3;overflow-x:auto;z-index:20}.toolbar label{font-size:11px;color:#53616d}.toolbar select{height:33px;border:1px solid #b9c3cb;border-radius:4px;background:#fff;padding:0 7px}.tool-btn{height:33px;min-width:34px;border:1px solid transparent;border-radius:4px;background:transparent;color:#26333e;cursor:pointer;padding:0 9px}.tool-btn:hover{background:#fff;border-color:#c4cbd2}.tool-btn:disabled{opacity:.45;cursor:not-allowed}.sep{width:1px;height:27px;background:#c4ccd2;margin:0 4px}.zoom-readout{min-width:49px;text-align:center;font-size:12px;color:#53616d}.workspace{min-height:0;display:grid;grid-template-columns:var(--source-width) var(--controls-width,190px) minmax(320px,1fr) var(--inspector-width,270px)}.panel{min-height:0;background:var(--panel);z-index:10}.source-panel{border-right:1px solid var(--line);display:flex;flex-direction:column;position:relative}.source-resize-handle{position:absolute;top:0;right:-5px;bottom:0;width:10px;cursor:col-resize;z-index:25;background:transparent}.source-resize-handle:hover,.source-resize-handle.active{background:rgba(36,117,168,.18)}.controls-panel{border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden;position:relative}.controls-resize-handle{position:absolute;top:0;right:-5px;bottom:0;width:10px;cursor:col-resize;z-index:25;background:transparent}.controls-resize-handle:hover,.controls-resize-handle.active{background:rgba(36,117,168,.18)}.control-palette{padding:8px;overflow:auto;display:flex;flex-direction:column;gap:7px}.control-item{display:grid;grid-template-columns:42px minmax(0,1fr);gap:8px;align-items:center;width:100%;padding:7px;border:1px solid #cbd3da;border-radius:6px;background:#fff;color:#263640;text-align:left;cursor:grab;user-select:none}.control-item:hover{background:#eef5fa;border-color:#8eb5cf}.control-item:active{cursor:grabbing}.control-palette.flowgorithm-palette{display:block;padding:8px 7px 12px}.flowgorithm-statement-header{background:#a9c9f2;border:1px solid #6187b4;padding:7px 9px;margin-bottom:10px;font-size:12px;color:#172b41}.flowgorithm-groups{display:grid;grid-template-columns:repeat(4,minmax(72px,1fr));gap:8px}.flow-control-group{min-width:0}.flow-control-group-title{text-align:center;font-size:11px;color:#192633;margin:0 0 8px;white-space:nowrap}.flowgorithm-palette .control-item{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:4px;border:0;background:transparent;padding:3px 1px;cursor:grab}.flowgorithm-palette .control-item:hover{background:#f0f4f7;border-color:transparent}.flowgorithm-palette .control-label{display:none}.flowgorithm-palette .control-icon{width:78px;height:34px;font-size:11px;font-weight:500;color:#111}.flowgorithm-palette .control-icon.fg-input{border-width:2px;background:#b0e0ff;border-color:#5080a0;transform:skew(-24deg)}.flowgorithm-palette .control-icon.fg-input span{transform:skew(24deg)}.flowgorithm-palette .control-icon.fg-output{border-width:2px;background:#d0ffd0;border-color:#70a070;transform:skew(-24deg)}.flowgorithm-palette .control-icon.fg-output span{transform:skew(24deg)}.flowgorithm-palette .control-icon.fg-declare{width:78px;height:34px;clip-path:none;border:2px solid #a0a070;background:#ffffd0}.flowgorithm-palette .control-icon.fg-declare:before{content:"";position:absolute;left:8px;top:0;bottom:0;border-left:1px solid #a0a070}.flowgorithm-palette .control-icon.fg-assign{width:78px;height:34px;border:2px solid #a0a070;background:#ffffd0}.flowgorithm-palette .control-icon.fg-if{width:58px;height:34px;border:1px solid #a07070;background:#ffd0d0;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);transform:none;margin-left:0}.flowgorithm-palette .control-icon.fg-if span{transform:none}.flowgorithm-palette .control-icon.fg-call{border:1px solid #9070a0;background:#f0e0ff}.flowgorithm-palette .control-icon.fg-call:before,.flowgorithm-palette .control-icon.fg-call:after{background:#9070a0;width:1px}.flowgorithm-palette .control-icon.fg-loop{border:1px solid #a08040;background:#ffe0a0;clip-path:polygon(14% 0,86% 0,100% 50%,86% 100%,14% 100%,0 50%)}.control-palette.flowgorithm-palette{display:flex;flex-direction:column;gap:8px;padding:8px}.flowgorithm-groups{display:flex;flex-direction:column;gap:10px}.flow-control-group{display:flex;flex-direction:column;gap:5px}.flow-control-group-title{text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.35px;color:#65727d;margin:2px 2px 1px}.flowgorithm-palette .control-item{display:grid;grid-template-columns:84px minmax(0,1fr);gap:8px;align-items:center;justify-content:stretch;width:100%;padding:6px 7px;border:1px solid #d1d8de;border-radius:6px;background:#fff;cursor:grab}.flowgorithm-palette .control-item:hover{background:#f0f4f7;border-color:#9bb6c8}.flowgorithm-palette .control-label{display:block}.flowgorithm-palette .control-label strong{font-size:12px;font-weight:600}.flowgorithm-palette .control-icon{justify-self:center}.control-icon{width:38px;height:31px;display:flex;align-items:center;justify-content:center;position:relative;color:#29485d;font-weight:800}.control-icon.process{border:2px solid #58758a;border-radius:3px;background:#fff}.control-icon.decision{width:27px;height:27px;border:2px solid #c27b18;background:#fff8e8;transform:rotate(45deg);margin-left:5px}.control-icon.decision span{transform:rotate(-45deg)}.control-icon.io{width:34px;height:27px;border:2px solid #3d83b6;background:#eef7ff;transform:skew(-12deg)}.control-icon.terminator{border:2px solid #358d57;border-radius:18px;background:#edf9f1}.control-icon.stop-sign{width:38px;height:38px;border:2px solid #8b2b25;background:#ffd7d3;clip-path:polygon(30% 0,70% 0,100% 30%,100% 70%,70% 100%,30% 100%,0 70%,0 30%)}.control-icon.rounded{border:2px solid #7255a5;border-radius:8px;background:#f6f2ff}.control-icon.dfd-process{border:2px solid #222;border-radius:8px;background:#d3d3d3}.control-icon.entity{border:2px solid #222;background:#d0d0d0;box-shadow:-5px -5px 0 -2px #d0d0d0,-5px -5px 0 0 #222}.control-icon.store{border:2px solid #222;background:#fff}.control-icon.store:before{content:attr(data-kind);width:12px;border-right:2px solid #222;height:100%;display:flex;align-items:center;justify-content:center;font-size:10px}.control-icon.table{border:2px solid #496b83;border-radius:3px;background:linear-gradient(#365d78 0 10px,#fff 10px)}.control-icon.textbox{font-size:22px;border:1px dashed #8a98a3;background:#fff}.control-icon.fg-assign{border:2px solid #a0a070;border-radius:2px;background:#ffffd0}.control-icon.fg-declare{width:34px;height:27px;background:#ffffd0;border:2px solid #a0a070;clip-path:polygon(12% 0,88% 0,100% 50%,88% 100%,12% 100%,0 50%)}.control-icon.fg-input{width:34px;height:27px;border:2px solid #5080a0;background:#b0e0ff;transform:skew(-12deg)}.control-icon.fg-output{width:34px;height:27px;border:2px solid #70a070;background:#d0ffd0;transform:skew(12deg)}.control-icon.fg-if{width:27px;height:27px;border:2px solid #a07070;background:#ffd0d0;transform:rotate(45deg);margin-left:5px}.control-icon.fg-if span{transform:rotate(-45deg)}.control-icon.fg-loop{width:34px;height:27px;border:2px solid #a08040;background:#ffe0a0;clip-path:polygon(14% 0,86% 0,100% 50%,86% 100%,14% 100%,0 50%)}.control-icon.fg-call{border:2px solid #9070a0;background:#f0e0ff}.control-icon.fg-call:before,.control-icon.fg-call:after{content:"";position:absolute;top:0;bottom:0;width:2px;background:#9070a0}.control-icon.fg-call:before{left:7px}.control-icon.fg-call:after{right:7px}.control-icon.fg-comment{border:1px dashed #8c8458;background:#fffde8;font-size:10px;color:#6e6743}.control-label strong{display:block;font-size:12px}.control-label small{display:block;color:#6a7781;font-size:10px;line-height:1.25;margin-top:2px}.right-panel{border-left:1px solid var(--line);overflow:auto;position:relative}.inspector-resize-handle{position:absolute;top:0;left:-5px;bottom:0;width:10px;cursor:col-resize;z-index:25;background:transparent}.inspector-resize-handle:hover,.inspector-resize-handle.active{background:rgba(36,117,168,.18)}.panel-head{height:39px;display:flex;align-items:center;justify-content:space-between;padding:0 10px;background:#e7ebef;border-bottom:1px solid var(--line);font-weight:750;color:#34424e}.source-meta{padding:9px 10px;border-bottom:1px solid var(--line);background:#f5f7f9;color:#5d6a75;font-size:12px;line-height:1.4}.editor-wrap{position:relative;flex:1;min-height:0;background:#17212b}.line-numbers{position:absolute;left:0;top:0;bottom:0;width:43px;padding:11px 7px;color:#72808d;background:#111920;text-align:right;font:13px/1.55 Consolas,"Courier New",monospace;white-space:pre;overflow:hidden;user-select:none;border-right:1px solid #2d3943}.source-editor{position:absolute;inset:0 0 0 43px;width:calc(100% - 43px);height:100%;resize:none;border:0;outline:0;padding:11px 12px;background:#17212b;color:#e4ebf0;caret-color:#ffb33f;tab-size:2;font:13px/1.55 Consolas,"Courier New",monospace;white-space:pre;overflow:auto}.source-footer{padding:7px 9px;border-top:1px solid var(--line);background:#eef2f5}.parse-status{min-height:19px;color:#52616c;font-size:12px}.parse-status.error{color:#a8332a}.canvas-shell{position:relative;min-width:0;min-height:0;overflow:hidden;background-color:var(--canvas);background-image:radial-gradient(#c5ced6 1px,transparent 1px);background-size:20px 20px}.canvas-shell.no-grid{background-image:none}#diagramSvg{width:100%;height:100%;display:block;touch-action:none;cursor:grab;user-select:none}#diagramSvg.panning{cursor:grabbing}.node{cursor:move}.node .body{filter:drop-shadow(0 1px 1px rgba(0,0,0,.17))}.node.selected .selection{display:block}.selection{display:none;fill:none;stroke:#e74c3c;stroke-width:2;stroke-dasharray:6 4;vector-effect:non-scaling-stroke}.edge{fill:none;stroke:#000;stroke-width:3;vector-effect:non-scaling-stroke;pointer-events:none}.edge.hovered{stroke:#e74c3c}.edge.drop-target{stroke:#e00000!important;stroke-width:5!important;filter:drop-shadow(0 0 3px rgba(224,0,0,.7))}.edge.selected{stroke:#e74c3c;stroke-width:3;stroke-dasharray:8 5;animation:edgeMarch .65s linear infinite}@keyframes edgeMarch{to{stroke-dashoffset:-13}}.edge-hit{fill:none;stroke:transparent;stroke-width:16;vector-effect:non-scaling-stroke;pointer-events:stroke;cursor:pointer}.flow-insert-arrow{cursor:pointer}.flow-insert-arrow .flow-insert-halo{fill:#fff;fill-opacity:.96;stroke:#d94138;stroke-width:1.6;vector-effect:non-scaling-stroke}.flow-insert-arrow:hover .flow-insert-halo{fill:#fff1ef;stroke:#b62822;stroke-width:2}.relationship-cardinality{pointer-events:none}.relationship-cardinality.selected line,.relationship-cardinality.selected circle{stroke:#e74c3c}.edge-label{cursor:pointer}.edge-label rect{fill:rgba(255,255,255,.92);stroke:#d2d9df;stroke-width:1}.edge-label.selected rect{stroke:#e74c3c;stroke-width:1.5}.edge-label text{pointer-events:none}.canvas-hint{position:absolute;left:12px;bottom:12px;padding:6px 9px;border:1px solid #c9d1d8;border-radius:4px;background:rgba(255,255,255,.88);color:#64727d;font-size:12px;pointer-events:none}.loading-cover{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(238,242,245,.88);z-index:20;font-size:16px;font-weight:750;color:#435260}.inspector{padding:12px}.empty{padding:30px 16px;text-align:center;color:var(--muted)}.info-card{border:1px solid #d3dae0;border-radius:6px;background:#fff;margin-bottom:11px;overflow:hidden}.info-card h3{font-size:13px;margin:0;padding:9px 10px;background:#edf1f4;border-bottom:1px solid #d7dde2}.info-body{padding:10px}.field{display:grid;grid-template-columns:86px minmax(0,1fr);gap:7px;align-items:center;margin-bottom:8px}.field:last-child{margin-bottom:0}.field label{font-size:11px;color:#5d6a75}.field input,.field select,.field textarea{width:100%;border:1px solid #bcc6ce;border-radius:4px;padding:5px 6px;background:#fff}.field .multiline-field{display:grid!important;grid-template-columns:minmax(0,1fr) 32px!important;grid-template-rows:auto!important;gap:6px!important;align-items:start!important;width:100%!important;max-width:100%!important;min-width:0!important;box-sizing:border-box!important;grid-column:2!important}.field .multiline-field>textarea{display:block!important;grid-column:1!important;grid-row:1!important;width:100%!important;min-width:0!important;max-width:100%!important;box-sizing:border-box!important;height:32px;min-height:32px;resize:none;overflow:hidden;white-space:pre-wrap}.field .multiline-field>.multiline-toggle{display:flex!important;grid-column:2!important;grid-row:1!important;justify-self:end!important;align-items:center!important;justify-content:center!important;width:32px!important;min-width:32px!important;max-width:32px!important;height:32px!important;min-height:32px!important;margin:0!important;padding:2px!important;box-sizing:border-box!important}.field .multiline-field>textarea[rows]:not([rows="1"]){height:110px!important;min-height:110px!important;resize:vertical!important;overflow:auto!important}.field input[type=color]{height:31px;padding:2px}.recent-colours-block{margin-top:8px;padding-top:8px;border-top:1px solid #e0e5e9}.recent-colours-title{font-size:11px;color:#5d6a75;margin-bottom:6px}.recent-colours{display:flex;gap:6px;flex-wrap:wrap;min-height:25px;align-items:center}.recent-colour{width:25px!important;height:25px!important;min-width:25px;padding:0!important;border:1px solid #8f9aa3!important;border-radius:4px!important;box-shadow:inset 0 0 0 1px rgba(255,255,255,.45);cursor:pointer}.recent-colours-empty{font-size:10px;color:#84909a}.format-checks{display:flex;gap:8px;flex-wrap:wrap;font-size:11px;color:#53616d}.format-checks label{display:flex;align-items:center;gap:3px}.format-checks input{width:auto}.floating-text{cursor:move}.floating-text text{pointer-events:none}.floating-text .text-hit{fill:rgba(255,255,255,.001);stroke:none;pointer-events:all}.floating-text .text-selection{display:none;fill:none;stroke:#e74c3c;stroke-width:1.5;stroke-dasharray:5 3;vector-effect:non-scaling-stroke;pointer-events:none}.floating-text.selected .text-selection{display:block}.mini-actions{display:flex;gap:5px;flex-wrap:wrap}.mini-btn{border:1px solid #bec7cf;border-radius:4px;background:#fff;padding:6px 8px;cursor:pointer}.mini-btn:hover{background:#edf2f6}.syntax-help{font-size:12px;line-height:1.5;color:#53616d}.syntax-help code{display:block;white-space:pre-wrap;background:#17212b;color:#dce5eb;padding:8px;border-radius:4px;margin-top:6px;font-family:Consolas,"Courier New",monospace}.statusbar{display:flex;align-items:center;gap:18px;padding:0 10px;background:#dfe5e9;border-top:1px solid #c3cbd2;color:#52606b;font-size:12px}.statusbar .grow{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.modal-backdrop{position:fixed;inset:0;z-index:500;display:flex;align-items:center;justify-content:center;padding:18px;background:rgba(13,20,27,.57)}.modal{display:flex;flex-direction:column;width:min(680px,100%);max-height:min(760px,92vh);background:#fff;border-radius:8px;box-shadow:0 18px 55px rgba(0,0,0,.36);overflow:hidden}.modal.small{width:min(490px,100%)}.modal-head{display:flex;justify-content:space-between;align-items:center;padding:13px 16px;background:#edf1f4;border-bottom:1px solid #cdd4da}.modal-head h2{font-size:17px;margin:0}.modal-close{border:0;background:transparent;font-size:22px;color:#63717d;cursor:pointer}.modal-body{padding:15px 16px;overflow:auto}.modal-foot{display:flex;justify-content:flex-end;gap:8px;padding:10px 16px;border-top:1px solid #d4dae0}.modal button{border:1px solid #b9c2ca;border-radius:4px;background:#fff;padding:7px 12px;cursor:pointer}.modal button.primary{background:var(--blue);border-color:var(--blue-dark);color:#fff}.modal textarea{width:100%;min-height:130px;border:1px solid #b9c3cb;border-radius:5px;padding:8px;resize:vertical}.new-object-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:9px}.new-object-choice{display:grid!important;grid-template-columns:46px minmax(0,1fr);gap:9px;align-items:center;text-align:left!important;padding:10px!important}.new-object-choice strong{display:block}.new-object-choice small{display:block;color:#687582;font-size:11px;margin-top:3px;line-height:1.3}.share-note{color:#5c6974;line-height:1.48}.share-option{display:flex;align-items:flex-start;gap:9px;margin:13px 0;padding:10px;background:#f7f9fa;border:1px solid #d4dae0;border-radius:5px}.share-option input{margin-top:3px}.share-option label{font-weight:700}.share-option small{display:block;margin-top:3px;color:#66737e;font-weight:400;line-height:1.4}.share-link-row{display:flex;gap:7px;margin-top:7px}.share-link-row input{flex:1;min-width:0;border:1px solid #b9c3cb;border-radius:4px;padding:8px;background:#f8fafb}.share-link-row button{background:var(--blue);color:#fff;border-color:var(--blue-dark)}.share-status{min-height:20px;margin-top:8px;color:#5b6974;font-size:13px}.share-status.error{color:#a83228}.toast-stack{position:fixed;right:15px;bottom:41px;z-index:1000;display:flex;flex-direction:column;gap:8px;pointer-events:none}.toast{min-width:230px;max-width:390px;background:#25323c;color:#fff;border-radius:5px;padding:10px 12px;box-shadow:var(--shadow)}.toast.error{background:#9f332a}.toast.success{background:#267346}@media(max-width:1180px){.workspace{grid-template-columns:var(--source-width) min(var(--controls-width,156px),220px) minmax(300px,1fr) 0}.right-panel{visibility:hidden}.tool-label{display:none}}@media(max-width:820px){.workspace{grid-template-columns:126px minmax(280px,1fr)}.source-resize-handle{display:none}.source-panel{position:absolute;left:0;top:93px;bottom:28px;width:min(390px,88vw);transform:translateX(-100%);transition:.2s;box-shadow:3px 0 14px rgba(0,0,0,.2)}.source-panel.mobile-open{transform:translateX(0)}.controls-panel{grid-column:1}.menu-strip{display:none}.title-wrap{min-width:100px}}@media(max-width:560px){.workspace{grid-template-columns:minmax(280px,1fr)}.controls-panel{display:none}}@media print{.topbar,.toolbar,.source-panel,.controls-panel,.right-panel,.statusbar,.canvas-hint{display:none!important}.app,.workspace,.canvas-shell{display:block;width:100%;height:100%;background:#fff}#diagramSvg{width:100vw;height:100vh}}
 
 
-/* Execution console and current-control spotlight — Charter 0.0.3 */
+/* Execution console and current-control spotlight — Charter 0.0.4 */
 .run-output{
   background:#000!important;color:#fff!important;
   font-family:Consolas,"Lucida Console","Courier New",monospace!important;
@@ -4288,7 +4382,7 @@ if ($showLanding) {
 }
 @media(prefers-reduced-motion:reduce){.node.run-active .body{animation:none!important;filter:drop-shadow(0 0 25px #ffba39) drop-shadow(0 0 60px #ff468a)!important}}
 
-/* Flowgorithm controls — Charter 0.0.3 baseline */
+/* Flowgorithm controls — Charter 0.0.4 baseline */
 .default-caption::placeholder{color:#8b949b;opacity:1;font-style:italic}
 .node .body{vector-effect:non-scaling-stroke}
 .flowgorithm-palette svg.control-icon,.new-object-choice svg.control-icon{display:block;background:transparent!important;border:0!important;clip-path:none!important;overflow:visible}
@@ -4389,7 +4483,9 @@ body.source-panel-hidden .workspace{grid-template-columns:var(--controls-width,1
 <button data-action="auto-layout">Auto-layout</button>
 <button data-action="fit">Fit diagram</button>
 <button data-action="toggle-grid">Toggle grid</button>
-<button data-action="toggle-labels">Toggle edge labels</button>
+<button data-action="toggle-captions">Enable captions</button>
+<button data-action="toggle-push-insertion">✓ Push On Insertion</button>
+
 </div></div>
 <div class="menu charter-view-menu"><button type="button">View</button><div class="dropdown">
 <button type="button" data-charter-view="settings">✓ Diagram settings</button>
@@ -4576,7 +4672,7 @@ function normaliseProject(data){
     data.id=data.id||uuid();data.title=data.title||definition.title;data.diagramType=type;data.sourceType=sourceType;data.source=String(data.source==null?definition.source:data.source);
     data.direction=['LR','TB','GRID','FV'].includes(data.direction)?data.direction:'TB';
     data.layout=data.layout&&typeof data.layout==='object'?data.layout:{};data.layout.positions=data.layout.positions&&typeof data.layout.positions==='object'?data.layout.positions:{};data.layout.positionsByKey=data.layout.positionsByKey&&typeof data.layout.positionsByKey==='object'?data.layout.positionsByKey:{};data.layout.links=data.layout.links&&typeof data.layout.links==='object'?data.layout.links:{};data.layout.nodeStyles=data.layout.nodeStyles&&typeof data.layout.nodeStyles==='object'?data.layout.nodeStyles:{};data.layout.nodeStylesByKey=data.layout.nodeStylesByKey&&typeof data.layout.nodeStylesByKey==='object'?data.layout.nodeStylesByKey:{};data.layout.textboxes=data.layout.textboxes&&typeof data.layout.textboxes==='object'?data.layout.textboxes:{};data.layout.hiddenNodes=data.layout.hiddenNodes&&typeof data.layout.hiddenNodes==='object'?data.layout.hiddenNodes:{};data.layout.hiddenEdges=data.layout.hiddenEdges&&typeof data.layout.hiddenEdges==='object'?data.layout.hiddenEdges:{};
-    data.settings=Object.assign({showGrid:true,showEdgeLabels:true,fontSize:14,lineType:'orthogonal'},data.settings||{});if(!['orthogonal','direct','curved'].includes(data.settings.lineType))data.settings.lineType='orthogonal';
+    data.settings=Object.assign({showGrid:true,showEdgeLabels:false,showCaptions:false,pushOnInsertion:true,fontSize:14,lineType:'orthogonal'},data.settings||{});data.settings.showCaptions=data.settings.showCaptions===true;data.settings.pushOnInsertion=data.settings.pushOnInsertion!==false;data.settings.showEdgeLabels=data.settings.showCaptions;if(!['orthogonal','direct','curved'].includes(data.settings.lineType))data.settings.lineType='orthogonal';
     data.dates=Object.assign({created:now(),modified:now()},data.dates||{});
     return data;
 }
@@ -4796,14 +4892,24 @@ function flowAssignParts(value){
     const match=text.match(/^([A-Za-z_]\w*)\s*(?:=\s*)?([\s\S]*)$/);
     return match?{variable:match[1],expression:match[2].trim()}:{variable:'',expression:text};
 }
+function flowInspectorEditableText(value){
+    const raw=String(value==null?'':value);
+    if(/^"(?:[^"\\]|\\.)*"$/s.test(raw)){try{return '"'+JSON.parse(raw)+'"';}catch(_){}}
+    return raw.replace(/\\r\\n|\\n|\\r/g,'\n');
+}
+function flowDisplayText(value){
+    const raw=String(value==null?'':value);
+    if(/^"(?:[^"\\]|\\.)*"$/s.test(raw)){try{return JSON.parse(raw);}catch(_){}}
+    return raw.replace(/\\r\\n|\\n|\\r/g,'\n');
+}
 function flowgorithmKindVisual(kind,key,value,caption){
     kind=String(kind||'').toLowerCase();key=String(key||'').trim();value=String(value==null?'':value).trim();
     const explicit=String(caption||'');
-    if(kind==='terminal')return{shape:'terminator',kind:'terminal',label:explicit||key};
-    if(kind==='stop')return{shape:'flow-stop',kind:'stop',label:explicit||key};
+    if(kind==='terminal')return{shape:'terminator',kind:'terminal',label:flowDisplayText(explicit||value||key)};
+    if(kind==='stop')return{shape:'flow-stop',kind:'stop',label:flowDisplayText(explicit||value||key)};
     const map={input:'flow-input',output:'flow-output',declare:'flow-declare',assign:'flow-assign',if:'flow-if',call:'flow-call',function:'flow-call',while:'flow-loop',for:'flow-for',do:'flow-loop'};
-    let display=explicit||value||key;
-    if(!explicit&&kind==='declare')display=key+(value?' = '+value:'');
+    let display=kind==='output'&&!explicit?String(value||key).replace(/\\r\\n|\\n|\\r/g,'\n'):flowDisplayText(explicit||value||key);
+    if(!explicit&&kind==='declare')display=key+(value?' = '+flowDisplayText(value):'');
     if(!explicit&&kind==='assign'){const a=flowAssignParts(value);display=a.variable?(a.variable+' = '+a.expression):key;}
     return{shape:map[kind]||'flow-assign',kind:kind||'statement',label:display};
 }
@@ -4839,11 +4945,11 @@ function parseFlowgorithmDeclaration(raw){
 function flowgorithmDeclarationForType(type,key){
     if(type==='start'||type==='terminal')return `terminal ${key}`;
     if(type==='end'||type==='stop')return `stop ${key}`;
-    if(type==='input')return `input ${key} value`;
-    if(type==='output')return `output ${key} value`;
+    if(type==='input')return `input ${key} undeclared_variable`;
+    if(type==='output')return `output ${key} ${JSON.stringify('Some text')}`;
     if(type==='declare')return `declare ${key}`;
     if(type==='assign')return `assign ${key} value = 0`;
-    if(type==='if')return `if ${key} condition`;
+    if(type==='if')return `if ${key} undeclared_variable == ????`;
     if(type==='call')return `function ${key} procedure()`;
     if(type==='while')return `while ${key} condition`;
     if(type==='for')return `for ${key} iterator=i; start=0; end=9; increment=1`;
@@ -5298,7 +5404,7 @@ function parseProject(){
     const nodeIds=new Set(model.nodes.map(n=>n.id));model.edges=model.edges.filter(edge=>nodeIds.has(edge.from)&&nodeIds.has(edge.to));return combineBidirectionalEdges(model);
 }
 
-function wrapText(text,maxChars=24){const words=String(text||'').split(/\s+/),lines=[];let current='';words.forEach(word=>{if(!current)current=word;else if((current+' '+word).length<=maxChars)current+=' '+word;else{lines.push(current);current=word;}});if(current)lines.push(current);return lines.slice(0,4);}
+function wrapText(text,maxChars=24){const lines=[];flowDisplayText(text).split(/\r?\n/).forEach(part=>{const words=part.split(/ +/),start=lines.length;let current='';words.forEach(word=>{if(!current)current=word;else if((current+' '+word).length<=maxChars)current+=' '+word;else{lines.push(current);current=word;}});if(current)lines.push(current);if(lines.length===start)lines.push(' ');});return lines.slice(0,8);}
 function measureNode(node){
     if(node.shape==='table'){const longest=Math.max(node.label.length,...node.fields.map(f=>(f.name+' '+f.type).length));return{width:Math.max(230,Math.min(360,longest*7.2+66)),height:42+Math.max(1,node.fields.length)*25};}
     if(node.shape==='dfd-process'){const lines=wrapText(node.label,22);return{width:Math.max(150,Math.min(245,Math.max(...lines.map(x=>x.length))*8+44)),height:Math.max(86,lines.length*19+58)};}
@@ -5424,7 +5530,7 @@ function applyGrid(){canvasShell.classList.toggle('no-grid',!project.settings.sh
 function renderDiagram(updateInspector=true){
     document.body.classList.toggle('fixed-vertical-mode',isFixedVertical());
     edgesLayer.innerHTML='';labelsLayer.innerHTML='';nodesLayer.innerHTML='';viewport.setAttribute('transform',`translate(${camera.x} ${camera.y}) scale(${camera.scale})`);
-    currentModel.edges.forEach(renderEdge);currentModel.nodes.forEach(renderNode);renderFloatingTextboxes();if(updateInspector)renderInspector();el('zoomReadout').textContent=Math.round(camera.scale*100)+'%';
+    currentModel.edges.forEach(renderEdge);currentModel.nodes.forEach(node=>{if(project.diagramType==='flowchart'&&project.sourceType==='flowgorithm'&&node.sourceKeyword){const label=flowgorithmKindVisual(node.flowKind,node.key,node.sourceValue,project.settings.showCaptions?node.sourceCaption:'').label;renderNode({...node,label});}else renderNode(node);});renderFloatingTextboxes();if(updateInspector)renderInspector();el('zoomReadout').textContent=Math.round(camera.scale*100)+'%';
 }
 function nodeAnchorInfo(fromId,toId){
     const a=currentPositions.get(fromId),b=currentPositions.get(toId),size=nodeSizes.get(fromId);if(!a||!b||!size)return{point:{x:a?a.x:0,y:a?a.y:0},normal:{x:1,y:0},side:'right'};
@@ -5581,7 +5687,7 @@ function writeFlowgorithmEdgeCaption(edge,caption){
 }
 function saveEdgeLayout(edgeId,settings){project.layout.links[edgeId]={caption1:String(settings.caption1||''),caption2:String(settings.caption2||''),offset1:{x:Number(settings.offset1.x)||0,y:Number(settings.offset1.y)||0},offset2:{x:Number(settings.offset2.x)||0,y:Number(settings.offset2.y)||0},style1:normaliseCaptionStyle(settings.style1),style2:normaliseCaptionStyle(settings.style2)};}
 function renderEdgeCaption(edge,caption,x,y,index,style){
-    if(!project.settings.showEdgeLabels||!caption)return;
+    if(!project.settings.showCaptions||!project.settings.showEdgeLabels||!caption)return;
     style=normaliseCaptionStyle(style);const label=String(caption),fontSize=style.fontSize,width=Math.min(320,Math.max(42,label.length*fontSize*.58+18)),height=Math.max(20,fontSize+9);
     const group=createSvg('g',{class:'edge-label'+(isSelected('edge',edge.id)?' selected':''),'data-edge-id':edge.id,'data-caption-index':index});
     group.appendChild(createSvg('rect',{x:x-width/2,y:y-height/2,width,height,rx:4}));
@@ -5612,7 +5718,7 @@ function renderEdge(edge){
     const from=currentPositions.get(edge.from),to=currentPositions.get(edge.to);if(!from||!to)return;
     const anchors=distributedEdgeAnchors(edge),aInfo=anchors.a,bInfo=anchors.b,isErd=project.diagramType==='erd',route=edgeRoute(aInfo,bInfo,project.settings.lineType||'orthogonal',isErd),selected=isSelected('edge',edge.id);
     const attrs={d:route.d,class:'edge'+(selected?' selected':'')};if(!isErd){attrs['marker-end']='url(#arrowHead)';if(edge.bidirectional)attrs['marker-start']='url(#arrowHead)';}
-    const path=createSvg('path',attrs);edgesLayer.appendChild(path);
+    const path=createSvg('path',attrs);if(edge.id===highlightedDropEdgeId)path.classList.add('drop-target');edgesLayer.appendChild(path);
     const hit=createSvg('path',{d:route.d,class:'edge-hit','data-edge-id':edge.id});hit.addEventListener('pointerdown',event=>event.stopPropagation());hit.addEventListener('mouseenter',()=>path.classList.add('hovered'));hit.addEventListener('mouseleave',()=>path.classList.remove('hovered'));hit.addEventListener('click',event=>{event.stopPropagation();clearTimeout(edgeClickTimer);const additive=event.shiftKey;edgeClickTimer=setTimeout(()=>{selectItem('edge',edge.id,additive);renderDiagram();edgeClickTimer=null;},220);});hit.addEventListener('dblclick',event=>{clearTimeout(edgeClickTimer);edgeClickTimer=null;openFlowgorithmInsertFromPointer(edge,event);});edgesLayer.appendChild(hit);
     if(isErd){const parts=splitCardinality(edge.cardinality);const marks=createSvg('g',{class:'relationship-cardinality'+(selected?' selected':'')});drawCardinality(marks,aInfo,parts[0]);drawCardinality(marks,bInfo,parts[1]);edgesLayer.appendChild(marks);}
     const layout=getEdgeLayout(edge);renderEdgeCaption(edge,layout.caption1,route.label.x+layout.offset1.x,route.label.y+layout.offset1.y,1,layout.style1);renderEdgeCaption(edge,layout.caption2,route.label.x+layout.offset2.x,route.label.y+layout.offset2.y,2,layout.style2);
@@ -5659,13 +5765,20 @@ function addMultilineText(group,lines,x,y,lineHeight=18,attrs={}){const text=cre
 function addCenteredMultilineText(group,lines,x,lineHeight=18,attrs={}){const safeLines=(lines&&lines.length?lines:[' ']);const text=createSvg('text',Object.assign({x,y:0,'text-anchor':'middle','dominant-baseline':'middle'},attrs));safeLines.forEach((line,i)=>{const span=createSvg('tspan',{x,y:(i-(safeLines.length-1)/2)*lineHeight,'dominant-baseline':'middle'});span.textContent=line||' ';text.appendChild(span);});group.appendChild(text);return text;}
 function beginInlineFlowgorithmEdit(node,group,size){
     if(!node||!group||!size||project.diagramType!=='flowchart'||project.sourceType!=='flowgorithm')return focusFlowgorithmInspectorEditor(node);
+    if(/[\r\n]/.test(flowInspectorEditableText(node.sourceValue||''))){focusFlowgorithmInspectorEditor(node);return;}
     selectItem('node',node.id,false);renderInspector();
-    const explicit=node.hasExplicitCaption?String(node.sourceCaption||''):'';
+    const captions=project.settings.showCaptions===true;
+    const editTarget=captions?'caption':node.flowKind==='declare'?'name':'value';
     const fo=createSvg('foreignObject',{x:-size.width/2+8,y:-size.height/2+8,width:Math.max(40,size.width-16),height:Math.max(34,size.height-16)});
-    const input=document.createElement('input');input.setAttribute('xmlns','http://www.w3.org/1999/xhtml');input.type='text';input.value=explicit||String(node.key||node.label||'');input.style.cssText='width:100%;height:100%;border:2px solid #2475a8;border-radius:4px;background:rgba(255,255,255,.96);font:500 21px Inter,Segoe UI,Arial,sans-serif;text-align:center;padding:4px 8px;outline:none;';
+    const input=document.createElement('input');input.setAttribute('xmlns','http://www.w3.org/1999/xhtml');input.type='text';
+    input.value=editTarget==='name'?node.key:editTarget==='caption'?(node.sourceCaption||''):String(node.sourceValue||'');
+    input.style.cssText='width:100%;height:100%;border:2px solid #2475a8;border-radius:4px;background:rgba(255,255,255,.96);font:500 18px Inter,Segoe UI,Arial,sans-serif;text-align:center;padding:4px 8px;outline:none;';
     fo.appendChild(input);group.appendChild(fo);
-    let finished=false;const finish=commit=>{if(finished)return;finished=true;const value=input.value.trim();if(commit&&value){pushUndoSnapshot();updateFlowgorithmNodeFields(node,node.key,value);}else renderDiagram();};
-    input.addEventListener('pointerdown',e=>e.stopPropagation());input.addEventListener('click',e=>e.stopPropagation());input.addEventListener('dblclick',e=>e.stopPropagation());input.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();finish(true);}else if(e.key==='Escape'){e.preventDefault();finish(false);}});input.addEventListener('blur',()=>finish(true));setTimeout(()=>{input.focus();input.select();},0);
+    let finished=false;const finish=commit=>{if(finished)return;finished=true;const value=input.value.trim();
+      if(commit){pushUndoSnapshot();updateFlowgorithmNodeFields(node,editTarget==='name'?value:node.key,editTarget==='caption'?value:(node.sourceCaption||''),editTarget==='value'?value:undefined);}else renderDiagram();};
+    input.addEventListener('pointerdown',e=>e.stopPropagation());input.addEventListener('click',e=>e.stopPropagation());input.addEventListener('dblclick',e=>e.stopPropagation());
+    input.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();finish(true);}else if(e.key==='Escape'){e.preventDefault();finish(false);}});
+    input.addEventListener('blur',()=>finish(true));setTimeout(()=>{input.focus();input.select();},0);
 }
 function renderNode(node){
     const p=currentPositions.get(node.id),size=nodeSizes.get(node.id);if(!p||!size)return;const group=createSvg('g',{class:'node'+(isSelected('node',node.id)?' selected':''),transform:`translate(${p.x} ${p.y})`,'data-id':node.id});
@@ -5725,7 +5838,7 @@ function updateFlowgorithmNodeFields(node,newName,newCaption,newValue){
     const oldName=String(node.key),caption=String(newCaption==null?'':newCaption).trim(),lines=sourceEditor.value.replace(/\r/g,'').split('\n');
     const idx=Number(node.sourceDeclarationLineIndex);if(!Number.isInteger(idx)||idx<0||idx>=lines.length)return false;
     let keyword=String(node.sourceKeyword||node.flowKind||'assign').toLowerCase();if(keyword==='start'||keyword==='end'||keyword==='terminal')keyword='terminal';if(keyword==='call')keyword='function';
-    const value=String(newValue==null?node.sourceValue:newValue).trim(),quoted=caption?' : '+JSON.stringify(caption):'';
+    let value=String(newValue==null?node.sourceValue:newValue).trim();if(/[\r\n]/.test(value)){const quote=value.startsWith('\"')&&value.endsWith('\"');value=JSON.stringify(quote?value.slice(1,-1):value);}const quoted=caption?' : '+JSON.stringify(caption):'';
     lines[idx]=keyword+' '+newName+(value?' '+value:'')+quoted;
     if(newName!==oldName){
         for(let i=0;i<lines.length;i++){
@@ -5755,13 +5868,13 @@ function updateFlowgorithmNodeType(node,newType){
     if(!node||project.diagramType!=='flowchart'||project.sourceType!=='flowgorithm')return false;
     const allowed=new Set(['terminal','if','stop','input','output','declare','assign','function','while','for']);newType=String(newType||'').toLowerCase();if(!allowed.has(newType))return false;
     const lines=sourceEditor.value.replace(/\r/g,'').split('\n'),idx=Number(node.sourceDeclarationLineIndex);if(!Number.isInteger(idx)||idx<0||idx>=lines.length)return false;
-    const caption=node.hasExplicitCaption?String(node.sourceCaption||''):'',quoted=caption?' : '+JSON.stringify(caption):'',defaults={input:'value',output:'value',declare:'',assign:'value = 0',if:'condition',function:'procedure()',while:'condition',for:'iterator=i; start=0; end=9; increment=1'},value=(newType==='terminal'||newType==='stop')?'':(String(node.sourceValue||'').trim()||defaults[newType]||'');
+    const caption=node.hasExplicitCaption?String(node.sourceCaption||''):'',quoted=caption?' : '+JSON.stringify(caption):'',defaults={input:'value',output:JSON.stringify('Some text'),declare:'',assign:'value = 0',if:'condition',function:'procedure()',while:'condition',for:'iterator=i; start=0; end=9; increment=1'},value=(newType==='terminal'||newType==='stop')?'':(String(node.sourceValue||'').trim()||defaults[newType]||'');
     lines[idx]=newType+' '+node.key+(value?' '+value:'')+quoted;sourceEditor.value=lines.join('\n');project.source=sourceEditor.value;updateLineNumbers();renderFromSource({fit:false,markDirty:false});selectItem('node',stableId('flowgorithm',node.key),false);setDirty(true);persistLayoutSoon();return true;
 }
 function focusFlowgorithmInspectorEditor(node){
     if(project.diagramType!=='flowchart'||project.sourceType!=='flowgorithm'||!node)return;
     selectItem('node',node.id,false);renderDiagram();
-    requestAnimationFrame(()=>{const target=node.hasExplicitCaption&&String(node.sourceCaption||'').trim()?el('nodeCaption'):el('nodeName');if(target){target.focus();target.select();}});
+    requestAnimationFrame(()=>{const target=project.settings.showCaptions&&node.hasExplicitCaption&&String(node.sourceCaption||'').trim()?el('nodeCaption'):(node.flowKind==='declare'?el('nodeName'):(el('nodeValue')||el('nodeName')));if(target){target.focus();target.select();}});
 }
 function beginFlowchartInlineEdit(node,group,size){
     if(project.diagramType!=='flowchart'||project.sourceType!=='flowgorithm'||!node)return;
@@ -5794,8 +5907,14 @@ svg.addEventListener('pointermove',event=>{if(dragState){const point=screenToWor
 svg.addEventListener('pointerup',event=>{if(dragState){const moved=dragState.moved;dragState=null;if(moved){captureCurrentLayout(false);syncFlowgorithmVisualPositionsToSource();persistLayoutSoon();}return;}if(panState){panState=null;svg.classList.remove('panning');}});
 svg.addEventListener('pointercancel',()=>{dragState=null;panState=null;svg.classList.remove('panning');});
 svg.addEventListener('dblclick',event=>{if(event.target.closest('.node')||event.target.closest('.floating-text')||event.target.closest('.edge-hit')||event.target.closest('.edge-label'))return;event.preventDefault();event.stopPropagation();addFloatingTextboxAt(event.clientX,event.clientY);});
-canvasShell.addEventListener('dragover',event=>{if(event.dataTransfer&&Array.from(event.dataTransfer.types||[]).includes('application/x-charter-control')){event.preventDefault();event.dataTransfer.dropEffect='copy';}});
-canvasShell.addEventListener('drop',event=>{const type=event.dataTransfer?event.dataTransfer.getData('application/x-charter-control'):'';if(!type)return;event.preventDefault();const p=screenToWorld(event.clientX,event.clientY);addControlAtWorld(type,p.x,p.y,!!(event.ctrlKey||event.metaKey||event.dataTransfer.getData('application/x-charter-unlinked')==='1'));});
+var highlightedDropEdgeId=null;
+function clearFlowDropHighlight(){highlightedDropEdgeId=null;edgesLayer.querySelectorAll('.edge.drop-target').forEach(path=>path.classList.remove('drop-target'));}
+function highlightFlowDropEdge(edge){const next=edge?edge.id:null;if(next===highlightedDropEdgeId)return;clearFlowDropHighlight();if(!next)return;highlightedDropEdgeId=next;const hits=[...edgesLayer.querySelectorAll('.edge-hit')];const hit=hits.find(path=>path.getAttribute('data-edge-id')===next);if(hit){const path=hit.previousElementSibling;if(path&&path.classList.contains('edge'))path.classList.add('drop-target');}}
+canvasShell.addEventListener('dragover',event=>{if(event.dataTransfer&&Array.from(event.dataTransfer.types||[]).includes('application/x-charter-control')){event.preventDefault();event.dataTransfer.dropEffect='copy';const p=screenToWorld(event.clientX,event.clientY);const unlinked=event.ctrlKey||event.metaKey;highlightFlowDropEdge(unlinked?null:flowchartDropEdge(p.x,p.y));}else clearFlowDropHighlight();});
+canvasShell.addEventListener('dragleave',event=>{if(!canvasShell.contains(event.relatedTarget))clearFlowDropHighlight();});
+window.addEventListener('dragend',clearFlowDropHighlight);
+
+canvasShell.addEventListener('drop',event=>{const type=event.dataTransfer?event.dataTransfer.getData('application/x-charter-control'):'';if(!type)return;event.preventDefault();clearFlowDropHighlight();const p=screenToWorld(event.clientX,event.clientY);addControlAtWorld(type,p.x,p.y,!!(event.ctrlKey||event.metaKey||event.dataTransfer.getData('application/x-charter-unlinked')==='1'));});
 svg.addEventListener('wheel',event=>{event.preventDefault();const rect=svg.getBoundingClientRect(),mx=event.clientX-rect.left,my=event.clientY-rect.top,old=camera.scale,next=Math.min(3,Math.max(.2,old*(event.deltaY<0?1.12:.89)));camera.x=mx-(mx-camera.x)*(next/old);camera.y=my-(my-camera.y)*(next/old);camera.scale=next;renderDiagram();},{passive:false});
 
 function stripFixedVerticalLayoutSource(){
@@ -6121,6 +6240,34 @@ async function toggleProgramRun(){
     }catch(error){if(runState.token===token){runState.output.push('ERROR: '+error.message);runState.errorNode=runState.current;renderRunInspector();toast(error.message,'error');runState.active=false;runState.paused=false;button.classList.remove('running');button.innerHTML='▶ <span class="tool-label">Run</span>';renderDiagram();if(runState.errorNode)applyRunNodeGlow(runState.errorNode,true);}}
 }
 
+function flowBranchToggleHtml(node){
+    const incoming=currentModel.edges.filter(e=>e.to===node.id);
+    for(const edge of incoming){
+       const parent=currentModel.nodes.find(n=>n.id===edge.from);
+       if(!parent||parent.flowKind!=='if')continue;
+       const siblings=currentModel.edges.filter(e=>e.from===parent.id&&e.to!==parent.id).sort((a,b)=>a.sourceLineIndex-b.sourceLineIndex);
+       if(siblings.length!==2)continue;
+       return '<button class="mini-btn" data-inspector-action="toggle-if-branch">Change to '+(siblings[0].id===edge.id?'False':'True')+'</button>';
+    }
+    return '';
+}
+function toggleFlowBranch(nodeId){
+    const node=currentModel.nodes.find(n=>n.id===nodeId);if(!node)return;
+    const edge=currentModel.edges.find(e=>e.to===nodeId&&currentModel.nodes.some(n=>n.id===e.from&&n.flowKind==='if'));if(!edge)return;
+    const siblings=currentModel.edges.filter(e=>e.from===edge.from&&e.to!==edge.from).sort((a,b)=>a.sourceLineIndex-b.sourceLineIndex);if(siblings.length!==2)return;
+    const lines=sourceEditor.value.split('\n'),a=siblings[0].sourceLineIndex,b=siblings[1].sourceLineIndex;
+    if(!Number.isInteger(a)||!Number.isInteger(b)||a<0||b<0||a===b)return;
+    pushUndoSnapshot();[lines[a],lines[b]]=[lines[b],lines[a]];
+    // Maintain explicit branch labels as well as source order.
+    const branchLine=(line,truth)=>{
+        const parsed=parseArrowLine(stripLineComment(line).trim());
+        return parsed?parsed.from+' -> '+parsed.to+' : '+truth:line;
+    };
+    lines[a]=branchLine(lines[a],'TRUE');lines[b]=branchLine(lines[b],'FALSE');
+    // True/False are determined by outgoing connection order.
+    sourceEditor.value=lines.join('\n');project.source=sourceEditor.value;updateLineNumbers();renderFromSource({fit:false,markDirty:false});
+    selectItem('node',nodeId,false);setDirty(true);renderDiagram();persistLayoutSoon();
+}
 function renderInspector(){
     if(runState.active||runState.view){renderRunInspector();return;}
     if(selectedItems.size>1){
@@ -6140,33 +6287,77 @@ function renderInspector(){
         if(edge){
             const from=currentModel.nodes.find(n=>n.id===edge.from),to=currentModel.nodes.find(n=>n.id===edge.to),layout=getEdgeLayout(edge);
             const captionBlock=(index,caption,offset,style)=>`<div class="info-card"><h3>Caption ${index}</h3><div class="info-body"><div class="field"><label>Caption</label><input id="edgeCaption${index}" value="${escapeAttr(caption)}" ${index===2?'placeholder="Optional second caption"':''}></div><div class="field"><label>X offset</label><input id="edgeCaption${index}X" type="number" value="${Math.round(offset.x)}"></div><div class="field"><label>Y offset</label><input id="edgeCaption${index}Y" type="number" value="${Math.round(offset.y)}"></div><div class="field"><label>Font size</label><input id="edgeCaption${index}Size" type="number" min="8" max="48" value="${style.fontSize}"></div><div class="field"><label>Colour</label><input id="edgeCaption${index}Color" type="color" value="${escapeAttr(style.color)}"></div>${recentColoursBlockHtml()}<div class="format-checks"><label><input id="edgeCaption${index}Bold" type="checkbox" ${style.bold?'checked':''}> Bold</label><label><input id="edgeCaption${index}Italic" type="checkbox" ${style.italic?'checked':''}> Italic</label><label><input id="edgeCaption${index}Underline" type="checkbox" ${style.underline?'checked':''}> Underline</label></div>${index===2?'<div class="mini-actions" style="margin-top:9px"><button class="mini-btn" data-inspector-action="reset-link">Reset captions</button></div>':''}</div></div>`;
-            inspector.innerHTML=`<div class="info-card"><h3>Selected connection</h3><div class="info-body"><div class="field"><label>From</label><input value="${escapeAttr(from?from.label:edge.from)}" readonly></div><div class="field"><label>To</label><input value="${escapeAttr(to?to.label:edge.to)}" readonly></div></div></div>${captionBlock(1,layout.caption1,layout.offset1,layout.style1)}${captionBlock(2,layout.caption2,layout.offset2,layout.style2)}<div class="info-card"><h3>Connection settings</h3><div class="info-body syntax-help">Caption text, offsets and formatting are stored with the diagram layout and included in browser autosave and shared diagrams.<div class="mini-actions" style="margin-top:9px"><button class="mini-btn" data-inspector-action="delete-selected">Delete connection</button></div></div></div>`;
+            inspector.innerHTML=`<div class="info-card"><h3>Selected connection</h3><div class="info-body"><div class="field"><label>From</label><input value="${escapeAttr(from?from.label:edge.from)}" readonly></div><div class="field"><label>To</label><input value="${escapeAttr(to?to.label:edge.to)}" readonly></div></div></div>${project.settings.showCaptions?captionBlock(1,layout.caption1,layout.offset1,layout.style1)+captionBlock(2,layout.caption2,layout.offset2,layout.style2):''}<div class="info-card"><h3>Connection settings</h3><div class="info-body syntax-help">Caption text, offsets and formatting are stored with the diagram layout and included in browser autosave and shared diagrams.<div class="mini-actions" style="margin-top:9px"><button class="mini-btn" data-inspector-action="delete-selected">Delete connection</button></div></div></div>`;
             let edgeUndoSnapshot=null,edgeUndoUsed=false;
             const styleFor=i=>({fontSize:Number(el(`edgeCaption${i}Size`).value)||11,color:el(`edgeCaption${i}Color`).value,bold:el(`edgeCaption${i}Bold`).checked,italic:el(`edgeCaption${i}Italic`).checked,underline:el(`edgeCaption${i}Underline`).checked});
-            const apply=()=>{if(!edgeUndoUsed){pushUndoSnapshot(edgeUndoSnapshot||makeUndoSnapshot());edgeUndoUsed=true;}const settings={caption1:el('edgeCaption1').value,caption2:el('edgeCaption2').value,offset1:{x:Number(el('edgeCaption1X').value)||0,y:Number(el('edgeCaption1Y').value)||0},offset2:{x:Number(el('edgeCaption2X').value)||0,y:Number(el('edgeCaption2Y').value)||0},style1:styleFor(1),style2:styleFor(2)};saveEdgeLayout(edge.id,settings);setDirty(true);renderDiagram(false);};
-            ['edgeCaption1','edgeCaption2','edgeCaption1X','edgeCaption1Y','edgeCaption2X','edgeCaption2Y','edgeCaption1Size','edgeCaption2Size','edgeCaption1Color','edgeCaption2Color','edgeCaption1Bold','edgeCaption2Bold','edgeCaption1Italic','edgeCaption2Italic','edgeCaption1Underline','edgeCaption2Underline'].forEach(id=>{const input=el(id);if(input){input.onfocus=()=>{edgeUndoSnapshot=makeUndoSnapshot();edgeUndoUsed=false;};input.oninput=apply;input.onchange=()=>{apply();if(id==='edgeCaption1'&&writeFlowgorithmEdgeCaption(edge,input.value)){const lineIndex=edge.sourceLineIndex;renderFromSource({fit:false,markDirty:false});const updated=currentModel.edges.find(e=>e.sourceLineIndex===lineIndex&&e.fromKey===edge.fromKey&&e.toKey===edge.toKey);if(updated){if(project.layout.links[edge.id]){project.layout.links[updated.id]=project.layout.links[edge.id];delete project.layout.links[edge.id];}selectedItems.delete('edge:'+edge.id);selectedItems.add('edge:'+updated.id);renderDiagram();}}if(id.endsWith('Color'))rememberRecentColour(input.value);persistLayoutSoon();edgeUndoSnapshot=null;edgeUndoUsed=false;};}});
+            const apply=()=>{if(!project.settings.showCaptions)return;if(!edgeUndoUsed){pushUndoSnapshot(edgeUndoSnapshot||makeUndoSnapshot());edgeUndoUsed=true;}const settings={caption1:el('edgeCaption1').value,caption2:el('edgeCaption2').value,offset1:{x:Number(el('edgeCaption1X').value)||0,y:Number(el('edgeCaption1Y').value)||0},offset2:{x:Number(el('edgeCaption2X').value)||0,y:Number(el('edgeCaption2Y').value)||0},style1:styleFor(1),style2:styleFor(2)};saveEdgeLayout(edge.id,settings);setDirty(true);renderDiagram(false);};
+            ['edgeCaption1','edgeCaption2','edgeCaption1X','edgeCaption1Y','edgeCaption2X','edgeCaption2Y','edgeCaption1Size','edgeCaption2Size','edgeCaption1Color','edgeCaption2Color','edgeCaption1Bold','edgeCaption2Bold','edgeCaption1Italic','edgeCaption2Italic','edgeCaption1Underline','edgeCaption2Underline'].forEach(id=>{const input=el(id);if(input){input.onfocus=()=>{edgeUndoSnapshot=makeUndoSnapshot();edgeUndoUsed=false;};input.oninput=apply;input.onchange=()=>{apply();if(project.settings.showCaptions&&id==='edgeCaption1'&&writeFlowgorithmEdgeCaption(edge,input.value)){const lineIndex=edge.sourceLineIndex;renderFromSource({fit:false,markDirty:false});const updated=currentModel.edges.find(e=>e.sourceLineIndex===lineIndex&&e.fromKey===edge.fromKey&&e.toKey===edge.toKey);if(updated){if(project.layout.links[edge.id]){project.layout.links[updated.id]=project.layout.links[edge.id];delete project.layout.links[edge.id];}selectedItems.delete('edge:'+edge.id);selectedItems.add('edge:'+updated.id);renderDiagram();}}if(id.endsWith('Color'))rememberRecentColour(input.value);persistLayoutSoon();edgeUndoSnapshot=null;edgeUndoUsed=false;};}});
         }else{
             const node=currentModel.nodes.find(n=>n.id===selectedId);
             if(!node){inspector.innerHTML=`<div class="info-card"><h3>Diagram</h3><div class="info-body syntax-help"><strong>${escapeHtml(project.diagramType.toUpperCase())}</strong><br>${escapeHtml(sourceDescription())}</div></div><div class="info-card"><h3>Canvas</h3><div class="info-body"><div class="mini-actions"><button class="mini-btn" data-inspector-action="fit">Fit</button><button class="mini-btn" data-inspector-action="layout">Auto-layout</button></div></div></div><div class="info-card"><h3>Connections</h3><div class="info-body syntax-help">Click any connector line or its caption to edit up to two captions, offsets and font formatting. Hold Shift while clicking to select multiple items. Double-click empty canvas space to add a floating textbox.</div></div>`;}
             else{
                 const p=currentPositions.get(node.id)||{x:0,y:0},extra=node.shape==='table'?`${node.fields.length} fields`:`${node.shape}`,visual=getNodeVisualStyle(node),colourCard=project.diagramType==='dfd'?`<div class="info-card"><h3>DFD object appearance</h3><div class="info-body"><div class="field"><label>Fill colour</label><input id="nodeFillColor" type="color" value="${escapeAttr(visual.fill)}"></div>${recentColoursBlockHtml()}<div class="mini-actions" style="margin-top:8px"><button class="mini-btn" data-inspector-action="reset-node-colour">Reset colour</button></div></div></div>`:'';
-                const isFg=project.diagramType==='flowchart'&&project.sourceType==='flowgorithm',nameValue=isFg?node.key:node.label,valueField=isFg?(node.flowKind==='assign'?`<div class="field"><label>Variable</label><input id="assignVariable" value="${escapeAttr(flowAssignParts(node.sourceValue).variable)}"></div><div class="field"><label>Expression</label><input id="assignExpression" value="${escapeAttr(flowAssignParts(node.sourceValue).expression)}"></div>`:`<div class="field"><label>${node.flowKind==='declare'?'Value':(['if','while','for'].includes(node.flowKind)?'Condition / parameters':'Value / expression')}</label><input id="nodeValue" value="${escapeAttr(node.sourceValue||'')}" placeholder="${node.flowKind==='declare'?'Optional initial value':'Optional'}"></div>`):'',captionField=isFg?`<div class="field"><label>Caption</label><input id="nodeCaption" value="${node.hasExplicitCaption?escapeAttr(node.sourceCaption):''}" placeholder="${escapeAttr(flowgorithmDefaultCaption(node))}" class="${node.hasExplicitCaption?'':'default-caption'}"></div>`:'',fgType=(node.flowKind==='call'?'function':(node.flowKind==='start'||node.flowKind==='end'?'terminal':node.flowKind)),typeField=isFg?`<div class="field"><label>Type</label><select id="nodeType">${['terminal','if','stop','input','output','declare','assign','function','while','for'].map(type=>`<option value="${type}" ${type===fgType?'selected':''}>${type}</option>`).join('')}</select></div>`:`<div class="field"><label>Type</label><input value="${escapeAttr(extra)}" readonly></div>`;inspector.innerHTML=`<div class="info-card"><h3>Selected object</h3><div class="info-body"><div class="field"><label>Name</label><input id="nodeName" value="${escapeAttr(nameValue)}" ${(project.diagramType==='dfd'||isFg)?'':'readonly'}></div>${valueField}${captionField}${typeField}<div class="field"><label>X</label><input id="nodeX" type="number" value="${Math.round(p.x)}"></div><div class="field"><label>Y</label><input id="nodeY" type="number" value="${Math.round(p.y)}"></div><div class="mini-actions"><button class="mini-btn" data-inspector-action="reset-node">Reset position</button><button class="mini-btn" data-inspector-action="delete-selected">Delete object</button></div></div></div>${colourCard}<div class="info-card"><h3>Source-controlled</h3><div class="info-body syntax-help">${project.diagramType==='dfd'?'Change the object name here or edit the DFD shorthand. Position and colour are stored with the diagram layout.':isFg?'Name is the source identifier. Caption is the text shown inside the control; leave Caption blank to use the grey default shown in the field.':'Names, shapes, fields and connections are controlled by the text in the left panel.'}</div></div>`;
+                const isFg=project.diagramType==='flowchart'&&project.sourceType==='flowgorithm',nameValue=isFg?node.key:node.label,valueField=isFg?(node.flowKind==='assign'?`<div class="field"><label>Variable</label><input id="assignVariable" value="${escapeAttr(flowAssignParts(node.sourceValue).variable)}"></div><div class="field"><label>Expression</label><input id="assignExpression" value="${escapeAttr(flowAssignParts(node.sourceValue).expression)}"></div>`:`<div class="field"><label>${node.flowKind==='declare'?'Value':(['if','while','for'].includes(node.flowKind)?'Condition / parameters':'Value / expression')}</label><span class="multiline-field"><textarea id="nodeValue" rows="1">${escapeHtml(flowInspectorEditableText(node.sourceValue||''))}</textarea><button type="button" class="mini-btn multiline-toggle" data-multiline="nodeValue" title="Switch to multiple lines" aria-label="Edit multiple lines"><svg viewBox="0 0 20 20" width="19" height="19" aria-hidden="true"><path d="M3 5h14M3 9h14M3 13h14M3 17h9" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg></button></span></div>`):'',captionField=isFg&&project.settings.showCaptions?`<div class="field"><label>Caption</label>${node.flowKind==='output'?`<span class="multiline-field"><textarea id="nodeCaption" rows="1">${node.hasExplicitCaption?escapeHtml(flowDisplayText(node.sourceCaption)):''}</textarea><button type="button" class="mini-btn multiline-toggle" data-multiline="nodeCaption" title="Switch to multiple lines" aria-label="Edit multiple lines"><svg viewBox="0 0 20 20" width="19" height="19" aria-hidden="true"><path d="M3 5h14M3 9h14M3 13h14M3 17h9" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg></button></span>`:`<input id="nodeCaption" value="${node.hasExplicitCaption?escapeAttr(node.sourceCaption):''}" placeholder="${escapeAttr(flowgorithmDefaultCaption(node))}" class="${node.hasExplicitCaption?'':'default-caption'}">`}</div>`:'',fgType=(node.flowKind==='call'?'function':(node.flowKind==='start'||node.flowKind==='end'?'terminal':node.flowKind)),typeField=isFg?`<div class="field"><label>Type</label><select id="nodeType">${['terminal','if','stop','input','output','declare','assign','function','while','for'].map(type=>`<option value="${type}" ${type===fgType?'selected':''}>${type}</option>`).join('')}</select></div>`:`<div class="field"><label>Type</label><input value="${escapeAttr(extra)}" readonly></div>`;inspector.innerHTML=`<div class="info-card"><h3>Selected object</h3><div class="info-body"><div class="field"><label>Name</label><input id="nodeName" value="${escapeAttr(nameValue)}" ${(project.diagramType==='dfd'||isFg)?'':'readonly'}></div>${valueField}${captionField}${typeField}<div class="field"><label>X</label><input id="nodeX" type="number" value="${Math.round(p.x)}"></div><div class="field"><label>Y</label><input id="nodeY" type="number" value="${Math.round(p.y)}"></div><div class="mini-actions"><button class="mini-btn" data-inspector-action="reset-node">Reset position</button><button class="mini-btn" data-inspector-action="delete-selected">Delete object</button>${isFg&&currentModel.edges.some(e=>e.from===node.id&&e.to===node.id)?'<button class="mini-btn" data-inspector-action="delete-self-link">Delete self-reference</button>':''}${isFg?flowBranchToggleHtml(node):''}</div></div></div>${colourCard}<div class="info-card"><h3>Source-controlled</h3><div class="info-body syntax-help">${project.diagramType==='dfd'?'Change the object name here or edit the DFD shorthand. Position and colour are stored with the diagram layout.':isFg?'Name is the source identifier. Caption is the text shown inside the control; leave Caption blank to use the grey default shown in the field.':'Names, shapes, fields and connections are controlled by the text in the left panel.'}</div></div>`;
             }
         }
     }
-    inspector.querySelectorAll('[data-inspector-action]').forEach(button=>button.onclick=()=>{const action=button.getAttribute('data-inspector-action');if(action==='fit')fitDiagram();if(action==='layout')autoLayout();if(action==='delete-selected')deleteSelectedDiagramItem();if(action==='clear-selection'){clearSelection();renderDiagram();}if(action==='reset-node'&&selectedId){pushUndoSnapshot();const node=currentModel.nodes.find(n=>n.id===selectedId);delete project.layout.positions[selectedId];if(node)delete project.layout.positionsByKey[nodeLayoutKey(node)];renderFromSource({fit:false});setDirty(true);persistLayoutSoon();}if(action==='reset-node-colour'&&selectedId){pushUndoSnapshot();const node=currentModel.nodes.find(n=>n.id===selectedId);delete project.layout.nodeStyles[selectedId];if(node)delete project.layout.nodeStylesByKey[nodeLayoutKey(node)];setDirty(true);renderDiagram();persistLayoutSoon();}if(action==='reset-link'&&selectedEdgeId){pushUndoSnapshot();delete project.layout.links[selectedEdgeId];setDirty(true);renderDiagram();persistLayoutSoon();}});
+    inspector.querySelectorAll('[data-inspector-action]').forEach(button=>button.onclick=()=>{const action=button.getAttribute('data-inspector-action');if(action==='toggle-if-branch'&&selectedId)toggleFlowBranch(selectedId);if(action==='delete-self-link'&&selectedId){const owner=currentModel.nodes.find(n=>n.id===selectedId);if(owner){const lines=sourceEditor.value.split('\n');const removes=new Set(currentModel.edges.filter(e=>e.from===owner.id&&e.to===owner.id).map(e=>e.sourceLineIndex));if(removes.size){pushUndoSnapshot();sourceEditor.value=lines.filter((_,i)=>!removes.has(i)).join('\n');project.source=sourceEditor.value;updateLineNumbers();renderFromSource({fit:false});setDirty(true);persistLayoutSoon();}}}if(action==='fit')fitDiagram();if(action==='layout')autoLayout();if(action==='delete-selected')deleteSelectedDiagramItem();if(action==='clear-selection'){clearSelection();renderDiagram();}if(action==='reset-node'&&selectedId){pushUndoSnapshot();const node=currentModel.nodes.find(n=>n.id===selectedId);delete project.layout.positions[selectedId];if(node)delete project.layout.positionsByKey[nodeLayoutKey(node)];renderFromSource({fit:false});setDirty(true);persistLayoutSoon();}if(action==='reset-node-colour'&&selectedId){pushUndoSnapshot();const node=currentModel.nodes.find(n=>n.id===selectedId);delete project.layout.nodeStyles[selectedId];if(node)delete project.layout.nodeStylesByKey[nodeLayoutKey(node)];setDirty(true);renderDiagram();persistLayoutSoon();}if(action==='reset-link'&&selectedEdgeId){pushUndoSnapshot();delete project.layout.links[selectedEdgeId];setDirty(true);renderDiagram();persistLayoutSoon();}});
     const nodeName=el('nodeName'),nodeCaption=el('nodeCaption'),nodeValue=el('nodeValue'),nodeType=el('nodeType');
+    // Keep explicit multiline mode active while the user is typing. In particular,
+    // typing the first character must not cancel the mode before Enter is pressed.
+    inspector.querySelectorAll('[data-multiline]').forEach(button=>{
+        const field=el(button.dataset.multiline);if(!field)return;
+        const hasBreaks=()=>/[\r\n]/.test(field.value);
+        function refresh(){
+            const expanded=field.dataset.multiline==='true'||hasBreaks();
+            field.rows=expanded?5:1;
+            field.style.height=expanded?'110px':'31px';
+            field.style.minHeight=expanded?'110px':'31px';
+            field.style.resize=expanded?'vertical':'none';
+            field.style.overflow=expanded?'auto':'hidden';
+            button.hidden=expanded;
+        }
+        button.addEventListener('click',event=>{
+            event.preventDefault();event.stopPropagation();
+            field.dataset.multiline='true';refresh();
+            field.focus();field.setSelectionRange(field.value.length,field.value.length);
+        });
+        // This handler runs before the inspector's navigation handler.
+        field.addEventListener('keydown',event=>{
+            if(event.key==='Enter'&&(field.dataset.multiline==='true'||hasBreaks())&&!event.ctrlKey&&!event.metaKey){
+                event.preventDefault();event.stopImmediatePropagation();
+                field.setRangeText('\n',field.selectionStart,field.selectionEnd,'end');
+                field.dispatchEvent(new Event('input',{bubbles:true}));
+            }
+        },true);
+        let previous=field.value;
+        field.addEventListener('input',event=>{
+            const now=field.value;
+            if(hasBreaks())field.dataset.multiline='true';
+            // Collapse only when a line break was removed, not when typing
+            // ordinary characters into an expanded but still single-line box.
+            else if(/[\r\n]/.test(previous))delete field.dataset.multiline;
+            previous=now;refresh();
+        });
+        if(hasBreaks())field.dataset.multiline='true';refresh();
+    });
     const assignVariable=el('assignVariable'),assignExpression=el('assignExpression');
     const fieldOrder=['nodeName',...(assignVariable?['assignVariable','assignExpression']:(nodeValue?['nodeValue']:[])),...(nodeCaption?['nodeCaption']:[]),...(nodeType?['nodeType']:[])];
     const fieldValue=()=>assignVariable?(assignVariable.value.trim()+(assignExpression&&assignExpression.value.trim()?' = '+assignExpression.value.trim():'')):(nodeValue?nodeValue.value:null);
+    const inspectorOwnerId=selectedId;
+    // Apply in-place edits before any outside pointer interaction rerenders inspector.
+    inspector.querySelectorAll('input,textarea,select').forEach(field=>{
+        if(!['nodeName','assignVariable','assignExpression','nodeValue','nodeCaption','nodeType'].includes(field.id))return;
+        field.addEventListener('change',()=>{if(currentModel.nodes.some(n=>n.id===inspectorOwnerId))saveInspectorFlowField(field.id,false);});
+    });
     function saveInspectorFlowField(fieldId,advance){
-        const node=currentModel.nodes.find(n=>n.id===selectedId);if(!node)return;
+        const node=currentModel.nodes.find(n=>n.id===inspectorOwnerId);if(!node)return;
         const destination=advance?fieldOrder[fieldOrder.indexOf(fieldId)+1]:null;
-        const nextName=nodeName?nodeName.value:node.key,nextCaption=nodeCaption?nodeCaption.value:'',nextValue=fieldValue();
+        const nextName=nodeName?nodeName.value:node.key,nextCaption=nodeCaption?nodeCaption.value:(node.hasExplicitCaption?node.sourceCaption:''),nextValue=fieldValue();
         if(fieldId==='nodeType'){
             if(nodeType.value!==(node.flowKind==='call'?'function':node.flowKind)){pushUndoSnapshot();updateFlowgorithmNodeType(node,nodeType.value);}
-        }else if(nextName!==node.key||nextCaption!==(node.hasExplicitCaption?node.sourceCaption:'')||String(nextValue??'')!==String(node.sourceValue||'')){
-            pushUndoSnapshot();updateFlowgorithmNodeFields(node,nextName,nextCaption,nextValue);
+        }else if(nextName!==node.key||nextCaption!==flowDisplayText(node.hasExplicitCaption?node.sourceCaption:'')||String(nextValue??'')!==flowInspectorEditableText(node.sourceValue||'')){
+            const targetSelection=selectedId;pushUndoSnapshot();updateFlowgorithmNodeFields(node,nextName,nextCaption,nextValue);if(targetSelection&&targetSelection!==inspectorOwnerId&&currentModel.nodes.some(n=>n.id===targetSelection))selectItem('node',targetSelection,false);
         }
         if(destination)requestAnimationFrame(()=>{const target=el(destination);if(target){target.focus();if(typeof target.select==='function')target.select();}});
     }
@@ -6175,7 +6366,7 @@ function renderInspector(){
             let completed=false;
             input.addEventListener('focus',()=>{completed=false;});
             input.addEventListener('keydown',event=>{
-                if(event.key==='Enter'||event.key==='Tab'){
+                if((event.key==='Enter'&&!(input.tagName==='TEXTAREA'&&(input.dataset.multiline==='true'||/[\r\n]/.test(input.value))))||event.key==='Tab'){
                     const idx=fieldOrder.indexOf(input.id);
                     // Commit before the inspector rerenders, then focus the next field.
                     event.preventDefault();completed=true;
@@ -6185,7 +6376,7 @@ function renderInspector(){
             });
             input.addEventListener('blur',()=>{if(!completed){completed=true;saveInspectorFlowField(input.id,false);}});
         });
-    }else if(nodeName&&selectedId){nodeName.addEventListener('change',()=>{const node=currentModel.nodes.find(n=>n.id===selectedId);if(node&&project.diagramType==='dfd')updateDfdObjectLabel(node,nodeName.value);});}
+    }else if(nodeName&&selectedId){nodeName.addEventListener('change',()=>{const node=currentModel.nodes.find(n=>n.id===inspectorOwnerId);if(node&&project.diagramType==='dfd')updateDfdObjectLabel(node,nodeName.value);});}
     const x=el('nodeX'),y=el('nodeY');if(x&&y){let nodeUndoSnapshot=null,nodeUndoUsed=false;const apply=()=>{if(!nodeUndoUsed){pushUndoSnapshot(nodeUndoSnapshot||makeUndoSnapshot());nodeUndoUsed=true;}const p={x:Number(x.value)||0,y:Number(y.value)||0};currentPositions.set(selectedId,p);project.layout.positions[selectedId]=p;setDirty(true);renderDiagram(false);};[x,y].forEach(input=>{input.onfocus=()=>{nodeUndoSnapshot=makeUndoSnapshot();nodeUndoUsed=false;};input.oninput=apply;input.onchange=()=>{apply();syncFlowgorithmVisualPositionsToSource();persistLayoutSoon();nodeUndoSnapshot=null;nodeUndoUsed=false;};});}
     const fill=el('nodeFillColor');if(fill&&selectedId){let colourSnapshot=null,colourUsed=false;const applyColour=()=>{const node=currentModel.nodes.find(n=>n.id===selectedId);if(!node)return;if(!colourUsed){pushUndoSnapshot(colourSnapshot||makeUndoSnapshot());colourUsed=true;}saveNodeVisualStyle(node,{fill:fill.value});setDirty(true);renderDiagram(false);};fill.onfocus=()=>{colourSnapshot=makeUndoSnapshot();colourUsed=false;};fill.oninput=applyColour;fill.onchange=()=>{applyColour();rememberRecentColour(fill.value);persistLayoutSoon();colourSnapshot=null;colourUsed=false;};inspector.querySelectorAll('[data-recent-colour]').forEach(button=>button.onclick=()=>{fill.value=button.getAttribute('data-recent-colour');fill.dispatchEvent(new Event('input',{bubbles:true}));fill.dispatchEvent(new Event('change',{bubbles:true}));});}
 }
@@ -6315,6 +6506,14 @@ function insertFlowgorithmObjectOnEdge(edge,type,x,y){
     if(!edge||project.sourceType!=='flowgorithm')return null;
     const lineIndex=Number(edge.sourceLineIndex);if(!Number.isInteger(lineIndex)||lineIndex<0)return null;
     const lines=sourceEditor.value.replace(/\r/g,'').split('\n');if(lineIndex>=lines.length)return null;
+    const insertionPush=[];
+    if(project.settings.pushOnInsertion!==false){
+      const a=currentPositions.get(edge.from),b=currentPositions.get(edge.to);
+      if(a&&b&&b.y>a.y+8){
+        const threshold=b.y-2;
+        currentModel.nodes.forEach(n=>{const pos=currentPositions.get(n.id);if(pos&&pos.y>=threshold)insertionPush.push({key:n.key,id:n.id,x:pos.x,y:pos.y+100});});
+      }
+    }
     const fromKey=String(edge.fromKey||'Start'),toKey=String(edge.toKey||'End');
     const fromNode=currentModel.nodes.find(n=>n.key===fromKey);
     let key=nextFlowgorithmKey(type);
@@ -6324,17 +6523,31 @@ function insertFlowgorithmObjectOnEdge(edge,type,x,y){
         const existing=new Set(currentModel.nodes.map(n=>String(n.key).toLowerCase()));
         key=stem;let suffix=2;while(existing.has(key.toLowerCase()))key=stem+suffix++;
     }
-    const variable=(type==='input'||type==='output')?mostRecentFlowVariable(fromNode):'';
+    const variable=(type==='input'||type==='output')&&fromNode&&['assign','declare'].includes(fromNode.flowKind)?mostRecentFlowVariable(fromNode):'';
     if(variable)key=flowVariableControlName(type,variable);
     let declaration=flowgorithmDeclarationForType(type,key);
     if(type==='assign'&&fromNode&&fromNode.flowKind==='declare')declaration=`assign ${key} ${fromNode.key} = 0`;
     else if(type==='assign'&&fromNode&&fromNode.flowKind==='assign')declaration=`assign ${key} ${String(fromNode.sourceValue||'value = 0').trim()}`;
     else if(type==='input'&&variable)declaration=`input ${key} ${variable} : ${JSON.stringify('Enter a new value for '+variable+':')}`;
-    else if(type==='output'&&variable)declaration=`output ${key} ${variable}`;
-    lines.splice(lineIndex,1,`${fromKey} -> ${key}`,`${key} -> ${toKey}`);
+    else if(type==='if'){const recent=mostRecentFlowVariable(fromNode);declaration=`if ${key} ${recent||'undeclared_variable'} == ????`; }
+    else if(type==='output'&&variable&&fromNode&&['assign','declare'].includes(fromNode.flowKind))declaration=`output ${key} ${variable}`;
+    const ifOutgoing=fromNode&&fromNode.flowKind==='if'?currentModel.edges.filter(e=>e.from===fromNode.id):[];
+    if(fromNode&&fromNode.flowKind==='if'&&ifOutgoing.length===1){
+        // Existing successor is TRUE. Add FALSE without disturbing that branch;
+        // converge on the existing TRUE successor's next item when available.
+        const trueSuccessor=currentModel.nodes.find(n=>n.id===ifOutgoing[0].to);
+        const afterTrue=trueSuccessor&&currentModel.edges.find(e=>e.from===trueSuccessor.id&&e.to!==fromNode.id);
+        const mergeNode=afterTrue&&currentModel.nodes.find(n=>n.id===afterTrue.to);
+        lines.splice(lineIndex+1,0,`${fromKey} -> ${key} : FALSE`,`${key} -> ${mergeNode?mergeNode.key:toKey}`);
+    }else lines.splice(lineIndex,1,`${fromKey} -> ${key}`,`${key} -> ${toKey}`);
     insertFlowgorithmDeclarationIntoLines(lines,declaration);
     setFlowgorithmSourceLines(lines);renderFromSource({fit:false,markDirty:false});
     const id=stableId('flowgorithm',key),node=currentModel.nodes.find(n=>n.id===id);if(node){const p={x:Number(x)||0,y:Number(y)||0};currentPositions.set(id,p);project.layout.positions[id]=p;project.layout.positionsByKey[nodeLayoutKey(node)]={id,key:node.key,type:node.type,x:p.x,y:p.y};selectItem('node',id,false);}
+    if(insertionPush.length&&!isFixedVertical())insertionPush.forEach(item=>{
+        const target=currentModel.nodes.find(n=>n.key===item.key);if(!target)return;
+        const point={x:item.x,y:item.y};currentPositions.set(target.id,point);project.layout.positions[target.id]=point;
+        project.layout.positionsByKey[nodeLayoutKey(target)]={id:target.id,key:target.key,type:target.type,x:point.x,y:point.y};
+    });
     if(isFixedVertical()){
         currentPositions=fixedVerticalPositions(currentModel);
         currentModel.nodes.forEach(item=>{const point=currentPositions.get(item.id);if(point){project.layout.positions[item.id]={x:point.x,y:point.y};project.layout.positionsByKey[nodeLayoutKey(item)]={id:item.id,key:item.key,type:item.type,x:point.x,y:point.y};}});
@@ -6508,7 +6721,7 @@ function openNewObjectDialog(){
     const body=`<p class="share-note">Choose an object to add to this ${escapeHtml(project.diagramType.toUpperCase())}. It will be added near the centre of the current canvas view and can then be dragged into position.</p><div class="new-object-grid">${controls.map(control=>`<button type="button" class="new-object-choice" data-new-control="${escapeAttr(control.type)}">${controlIconHtml(control)}<span><strong>${escapeHtml(control.label)}</strong><small>${escapeHtml(control.hint)}</small></span></button>`).join('')}</div>`;
     const root=showModal('New Object',body,'<button data-cancel>Cancel</button>',false);root.querySelector('[data-cancel]').onclick=closeModal;root.querySelectorAll('[data-new-control]').forEach(button=>button.onclick=()=>{const type=button.getAttribute('data-new-control');closeModal();addControlAtCanvasCentre(type);});
 }
-function newDiagram(type,sourceType){if(dirty&&!confirm('Discard unsaved changes?')){el('diagramType').value=project.diagramType;refreshSourceTypeOptions();el('sourceType').value=project.sourceType;el('direction').value=project.direction;el('lineType').value=project.settings.lineType;return;}if(type==='dfd'){const next=clone(DEFAULT_DFD_PROJECT);next.id=uuid();next.dates={created:now(),modified:now()};next.layout=next.layout||{};next.layout.textboxes={};next.layout.hiddenNodes=next.layout.hiddenNodes||{};next.layout.hiddenEdges=next.layout.hiddenEdges||{};setProject(next);setDirty(true);return;}const key=type==='erd'?'erd-'+sourceType:(type==='flowchart'?'flowchart-'+sourceType:type),definition=DEFAULT_PROJECTS[key]||DEFAULT_PROJECTS['flowchart-flowgorithm']||DEFAULT_PROJECTS.flowchart;setProject({title:definition.title,diagramType:definition.type,sourceType:definition.sourceType,source:definition.source,direction:'TB',layout:{positions:{},positionsByKey:{},links:{},nodeStyles:{},nodeStylesByKey:{},textboxes:{},hiddenNodes:{},hiddenEdges:{}},settings:{showGrid:true,showEdgeLabels:true,fontSize:14,lineType:'orthogonal'},dates:{created:now(),modified:now()},id:uuid()});setDirty(true);}
+function newDiagram(type,sourceType){if(dirty&&!confirm('Discard unsaved changes?')){el('diagramType').value=project.diagramType;refreshSourceTypeOptions();el('sourceType').value=project.sourceType;el('direction').value=project.direction;el('lineType').value=project.settings.lineType;return;}if(type==='dfd'){const next=clone(DEFAULT_DFD_PROJECT);next.id=uuid();next.dates={created:now(),modified:now()};next.layout=next.layout||{};next.layout.textboxes={};next.layout.hiddenNodes=next.layout.hiddenNodes||{};next.layout.hiddenEdges=next.layout.hiddenEdges||{};setProject(next);setDirty(true);return;}const key=type==='erd'?'erd-'+sourceType:(type==='flowchart'?'flowchart-'+sourceType:type),definition=DEFAULT_PROJECTS[key]||DEFAULT_PROJECTS['flowchart-flowgorithm']||DEFAULT_PROJECTS.flowchart;setProject({title:definition.title,diagramType:definition.type,sourceType:definition.sourceType,source:definition.source,direction:'TB',layout:{positions:{},positionsByKey:{},links:{},nodeStyles:{},nodeStylesByKey:{},textboxes:{},hiddenNodes:{},hiddenEdges:{}},settings:{showGrid:true,showEdgeLabels:false,showCaptions:false,pushOnInsertion:true,fontSize:14,lineType:'orthogonal'},dates:{created:now(),modified:now()},id:uuid()});setDirty(true);}
 
 function syntaxHelpHtml(){
     const examples={
@@ -6542,7 +6755,7 @@ Start -> End
     return`<p class="share-note">${escapeHtml(sourceDescription())}</p>${flowNote}<div class="syntax-help"><code>${escapeHtml(examples[project.sourceType]||examples.qcaa)}</code></div><p class="share-note">Changes render automatically after a short pause. Press <strong>Ctrl+Enter</strong> to render immediately.</p>`;
 }
 function showSyntaxHelp(){showModal('Notation help',syntaxHelpHtml(),'<button class="primary" data-done>Done</button>',false);el('modalRoot').querySelector('[data-done]').onclick=closeModal;}
-function showAbout(){showModal('About Charter','<p class="share-note"><strong>Charter 0.0.3</strong></p><p class="share-note">Charter 0.0.3 supports four diagram types: flowcharts, data-flow diagrams, entity-relationship diagrams and mind maps. Flowcharts, DFDs and ERDs use a text-driven editor; mind maps use a hierarchical visual editor.</p><p class="share-note">Shared diagrams are stored in the MySQL or MariaDB database configured in <code>charter-config.php</code>. Anyone with an unguessable editable share link can modify that shared copy. An always-new-session link creates an independent copy for every visitor.</p>','<button class="primary" data-done>Done</button>',false);el('modalRoot').querySelector('[data-done]').onclick=closeModal;}
+function showAbout(){showModal('About Charter','<p class="share-note"><strong>Charter 0.0.4</strong></p><p class="share-note">Charter 0.0.4 supports four diagram types: flowcharts, data-flow diagrams, entity-relationship diagrams and mind maps. Flowcharts, DFDs and ERDs use a text-driven editor; mind maps use a hierarchical visual editor.</p><p class="share-note">Shared diagrams are stored in the MySQL or MariaDB database configured in <code>charter-config.php</code>. Anyone with an unguessable editable share link can modify that shared copy. An always-new-session link creates an independent copy for every visitor.</p><p class="share-note">Copyright (c) 2026 Simon Walker &amp; Timothy Lever, Queensland Department of Education</p><p class="share-note"><a href="https://github.com/simonnjwalker/charter" target="_blank" rel="noopener noreferrer">https://github.com/simonnjwalker/charter</a></p>','<button class="primary" data-done>Done</button>',false);el('modalRoot').querySelector('[data-done]').onclick=closeModal;}
 
 async function sendServerRequest(action,payload=null,query={}){const address=new URL(window.location.href);address.search='';address.hash='';address.searchParams.set('charter_action',action);Object.keys(query).forEach(k=>address.searchParams.set(k,query[k]));const options={cache:'no-store'};if(payload!==null){options.method='POST';options.headers={'Content-Type':'application/json'};options.body=JSON.stringify(payload);}const response=await fetch(address.pathname+address.search,options),raw=await response.text();let data;try{data=JSON.parse(raw);}catch(error){throw new Error('The server returned an invalid response. '+raw.slice(0,180));}if(!data.ok)throw new Error(data.error||'The server request failed.');return data;}
 async function loadSharedProject(shareId){el('loadingCover').classList.remove('hidden');try{const data=await sendServerRequest('load',null,{share:shareId});setProject(data.project,{serverShareId:data.shareId,serverShareUrl:data.shareUrl,serverNewSessionUrl:data.newSessionUrl});toast('Shared diagram loaded.','success');}finally{el('loadingCover').classList.add('hidden');}}
@@ -6567,7 +6780,35 @@ async function saveProjectToServer(forceNew=false){
     return Object.assign({},data,{project:clone(project)});
 }
 async function copyText(value,button){try{await navigator.clipboard.writeText(value);const old=button.textContent;button.textContent='Copied';setTimeout(()=>button.textContent=old,1300);}catch(error){const input=button.parentElement.querySelector('input');input.focus();input.select();document.execCommand('copy');}}
-function openShareDialog(){prepareProjectForPersistence();saveAutosave();const root=showModal('Share diagram',`<p class="share-note">The standard link opens and edits this shared diagram. Select <strong>Always open a new session</strong> to create a reusable link that gives every visitor a fresh independent copy.</p><div class="share-option"><input id="alwaysNew" type="checkbox"><label for="alwaysNew">Always open a new session<small>Changes made by one visitor will not affect the original diagram or anyone else’s session.</small></label></div><label id="shareLabel" for="shareInput">Editable share link</label><div class="share-link-row"><input id="shareInput" readonly><button id="copyShare" disabled>Copy link</button></div><div id="shareStatus" class="share-status">Saving the diagram and creating its link…</div>`,`<button class="primary" data-done>Done</button>`,true);const checkbox=el('alwaysNew'),input=el('shareInput'),copy=el('copyShare'),status=el('shareStatus'),label=el('shareLabel');let standard=serverShareUrl||'',newLink=serverNewSessionUrl||'',busy=false;function display(url,message,isNew){input.value=url||'';copy.disabled=!url;label.textContent=isNew?'Always-new-session link':'Editable share link';status.className='share-status';status.textContent=message;if(url){input.focus();input.select();}}async function build(useNew){if(busy)return;/* Always write a fresh project snapshot so every current X/Y coordinate is persisted. */busy=true;checkbox.disabled=true;copy.disabled=true;status.textContent='Saving the current diagram…';try{const data=await saveProjectToServer(false);standard=data.shareUrl||standard;newLink=data.newSessionUrl||newLink;display(useNew?newLink:standard,useNew?'Reusable new-session link ready.':'Editable share link ready.',useNew);}catch(error){status.className='share-status error';status.textContent=error.message;}finally{busy=false;checkbox.disabled=false;}}checkbox.onchange=()=>build(checkbox.checked);copy.onclick=()=>copyText(input.value,copy);input.onclick=()=>input.select();root.querySelector('[data-done]').onclick=closeModal;build(false);}
+// Minimal standards-compliant DOCX writer. No CDN, Composer, server endpoint or DB change.
+function charterDocxXmlEscape(value){return String(value??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');}
+function charterDocxParagraph(text,style=''){const runs=String(text).split(/\r?\n/).map(t=>`<w:r>${style?'<w:rPr>'+style+'</w:rPr>':''}<w:t xml:space="preserve">${charterDocxXmlEscape(t)}</w:t></w:r>`);return `<w:p>${runs.join('<w:r><w:br/></w:r>')}</w:p>`;}
+function charterDocxZip(files){
+ const enc=new TextEncoder(),entries=[];let offset=0;const chunks=[];
+ const crcTable=charterDocxZip.crcTable||(charterDocxZip.crcTable=Array.from({length:256},(_,n)=>{let c=n;for(let j=0;j<8;j++)c=(c&1)?0xedb88320^(c>>>1):c>>>1;return c>>>0;}));
+ const u16=(v,o,n)=>v.setUint16(o,n,true),u32=(v,o,n)=>v.setUint32(o,n>>>0,true);
+ function crc(bytes){let c=0xffffffff;for(const b of bytes)c=crcTable[(c^b)&255]^(c>>>8);return(c^0xffffffff)>>>0;}
+ for(const [filename,content] of files){const name=enc.encode(filename),data=typeof content==='string'?enc.encode(content):content,c=crc(data),header=new Uint8Array(30+name.length),v=new DataView(header.buffer);u32(v,0,0x04034b50);u16(v,4,20);u16(v,6,0);u16(v,8,0);u32(v,14,c);u32(v,18,data.length);u32(v,22,data.length);u16(v,26,name.length);header.set(name,30);chunks.push(header,data);entries.push({name,data,c,offset});offset+=header.length+data.length;}
+ const centralOffset=offset;
+ for(const e of entries){const h=new Uint8Array(46+e.name.length),v=new DataView(h.buffer);u32(v,0,0x02014b50);u16(v,4,20);u16(v,6,20);u32(v,16,e.c);u32(v,20,e.data.length);u32(v,24,e.data.length);u16(v,28,e.name.length);u32(v,42,e.offset);h.set(e.name,46);chunks.push(h);offset+=h.length;}
+ const tail=new Uint8Array(22),dv=new DataView(tail.buffer);u32(dv,0,0x06054b50);u16(dv,8,entries.length);u16(dv,10,entries.length);u32(dv,12,offset-centralOffset);u32(dv,16,centralOffset);chunks.push(tail);return new Blob(chunks,{type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
+}
+async function charterDownloadWord(shareUrl){
+ if(!shareUrl)throw Error('Create the share link before downloading Word.');
+ const built=buildExportSvg(),svgText=new XMLSerializer().serializeToString(built.svg);
+ const img=await new Promise((resolve,reject)=>{const image=new Image(),url=URL.createObjectURL(new Blob([svgText],{type:'image/svg+xml'}));image.onload=()=>{const scale=Math.min(2,Math.max(1,2400/Math.max(built.width,built.height))),canvas=document.createElement('canvas');canvas.width=Math.ceil(built.width*scale);canvas.height=Math.ceil(built.height*scale);canvas.getContext('2d').drawImage(image,0,0,canvas.width,canvas.height);URL.revokeObjectURL(url);canvas.toBlob(blob=>blob?blob.arrayBuffer().then(buffer=>resolve(new Uint8Array(buffer))):reject(Error('PNG encoding failed')),'image/png');};image.onerror=()=>{URL.revokeObjectURL(url);reject(Error('Could not render diagram PNG'));};image.src=url;});
+ const name=project.title||'Diagram',code=sourceEditor.value;
+ const maxWidth=5486400,maxHeight=6858000,twip=Math.min(maxWidth/built.width,maxHeight/built.height),cx=Math.round(built.width*twip),cy=Math.round(built.height*twip);
+ const imagePara=`<w:p><w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="1" name="Current diagram"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name="Diagram PNG"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
+ const title=charterDocxParagraph(name,'<w:b/><w:sz w:val="32"/>');
+ const hyperlink=`<w:p><w:hyperlink r:id="rId1"><w:r><w:rPr><w:color w:val="0563C1"/><w:u w:val="single"/></w:rPr><w:t xml:space="preserve">${charterDocxXmlEscape(shareUrl)}</w:t></w:r></w:hyperlink></w:p>`;
+ const mono='<w:rFonts w:ascii="Courier New" w:hAnsi="Courier New"/><w:sz w:val="18"/>';
+ const body=title+'<w:p/>'+hyperlink+'<w:p/>'+imagePara+'<w:p/>'+charterDocxParagraph(code,mono);
+ const documentXml=`\x3c?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><w:body>${body}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1200" w:right="1200" w:bottom="1200" w:left="1200"/></w:sectPr></w:body></w:document>`;
+ const files=[['[Content_Types].xml','\x3c?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'],['_rels/.rels','\x3c?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'],['word/document.xml',documentXml],['word/_rels/document.xml.rels',`\x3c?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${charterDocxXmlEscape(shareUrl)}" TargetMode="External"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/diagram.png"/></Relationships>`],['word/media/diagram.png',img]];
+ downloadBlob(charterDocxZip(files),safeFilename(name)+'.docx');
+}
+function openShareDialog(){prepareProjectForPersistence();saveAutosave();const root=showModal('Share diagram',`<p class="share-note">The standard link opens and edits this shared diagram. Select <strong>Always open a new session</strong> to create a reusable link that gives every visitor a fresh independent copy.</p><div class="share-option"><input id="alwaysNew" type="checkbox"><label for="alwaysNew">Always open a new session<small>Changes made by one visitor will not affect the original diagram or anyone else’s session.</small></label></div><label id="shareLabel" for="shareInput">Editable share link</label><div class="share-link-row"><input id="shareInput" readonly><button id="copyShare" disabled>Copy link</button><button id="downloadShareWord" type="button" disabled title="Download Microsoft Word document" aria-label="Download Microsoft Word document" style="display:inline-flex;align-items:center;gap:5px"><svg xmlns="http://www.w3.org/2000/svg" width="19" height="19" viewBox="0 0 24 24" aria-hidden="true"><path fill="#185ABD" d="M5 2h11l5 5v15H5z"/><path fill="#fff" d="M15 2v6h6z"/><path fill="#fff" d="m8 11 1.2 7h1.3l1.5-4.2 1.5 4.2h1.3l1.2-7h-1.4l-.6 4.7-1.5-4.7h-1l-1.5 4.7-.6-4.7z"/></svg>Word</button></div><div id="shareStatus" class="share-status">Saving the diagram and creating its link…</div>`,`<button class="primary" data-done>Done</button>`,true);const checkbox=el('alwaysNew'),input=el('shareInput'),copy=el('copyShare'),word=el('downloadShareWord'),status=el('shareStatus'),label=el('shareLabel');let standard=serverShareUrl||'',newLink=serverNewSessionUrl||'',busy=false;function display(url,message,isNew){input.value=url||'';copy.disabled=!url;word.disabled=!url;label.textContent=isNew?'Always-new-session link':'Editable share link';status.className='share-status';status.textContent=message;if(url){input.focus();input.select();}}async function build(useNew){if(busy)return;/* Always write a fresh project snapshot so every current X/Y coordinate is persisted. */busy=true;checkbox.disabled=true;copy.disabled=true;word.disabled=true;status.textContent='Saving the current diagram…';try{const data=await saveProjectToServer(false);standard=data.shareUrl||standard;newLink=data.newSessionUrl||newLink;display(useNew?newLink:standard,useNew?'Reusable new-session link ready.':'Editable share link ready.',useNew);}catch(error){status.className='share-status error';status.textContent=error.message;}finally{busy=false;checkbox.disabled=false;}}checkbox.onchange=()=>build(checkbox.checked);copy.onclick=()=>copyText(input.value,copy);word.onclick=async()=>{word.disabled=true;try{await charterDownloadWord(input.value);}catch(error){toast(error.message,'error');}finally{word.disabled=!input.value;}};input.onclick=()=>input.select();root.querySelector('[data-done]').onclick=closeModal;build(false);}
 function openSaveTemplateDialog(){const root=showModal('Save as template',`<p class="share-note">Publish an anonymous reusable template on the Charter landing page. Enter the administrator password from <code>charter-config.php</code>.</p><div class="field" style="grid-template-columns:110px minmax(0,1fr)"><label for="templateTitle">Template name</label><input id="templateTitle" value="${escapeAttr(project.title)}"></div><div class="field" style="grid-template-columns:110px minmax(0,1fr)"><label for="templateDescription">Description</label><textarea id="templateDescription" placeholder="Explain what this template is for."></textarea></div><div class="field" style="grid-template-columns:110px minmax(0,1fr)"><label for="templatePassword">Password</label><input id="templatePassword" type="password" autocomplete="current-password"></div><div id="templateStatus" class="share-status"></div><div id="templateLinkRow" class="share-link-row hidden"><input id="templateLink" readonly><button id="copyTemplate">Copy link</button></div>`,`<button data-cancel>Cancel</button><button class="primary" data-save>Save template</button>`,true);const save=root.querySelector('[data-save]'),status=el('templateStatus');root.querySelector('[data-cancel]').onclick=closeModal;el('copyTemplate').onclick=()=>copyText(el('templateLink').value,el('copyTemplate'));save.onclick=async()=>{prepareProjectForPersistence();if(!el('templatePassword').value){status.className='share-status error';status.textContent='Enter the administrator password.';return;}save.disabled=true;status.className='share-status';status.textContent='Saving template…';try{const data=await sendServerRequest('save_template',{title:el('templateTitle').value.trim(),description:el('templateDescription').value.trim(),password:el('templatePassword').value,project:Object.assign({},project,{source:sourceEditor.value})});status.textContent='Template saved and listed on the landing page.';el('templateLink').value=data.templateUrl||'';el('templateLinkRow').classList.toggle('hidden',!data.templateUrl);toast('Template saved.','success');}catch(error){status.className='share-status error';status.textContent=error.message;}finally{save.disabled=false;el('templatePassword').value='';}};}
 
 function saveBrowser(){prepareProjectForPersistence();const key=`charter.project.${project.id}`;localStorage.setItem(key,JSON.stringify(project));let list=[];try{list=JSON.parse(localStorage.getItem('charter.projectList')||'[]');}catch(error){}list=list.filter(x=>x.id!==project.id);list.unshift({id:project.id,title:project.title,modified:now(),type:project.diagramType});localStorage.setItem('charter.projectList',JSON.stringify(list.slice(0,50)));localProjectKey=key;setDirty(false);toast('Diagram saved in this browser.','success');}
@@ -6690,7 +6931,8 @@ function openExportSqlDialog(defaultPython=false){
     root.querySelector('[data-done]').onclick=closeModal;refresh();
 }
 
-function handleAction(action){closeMenus();if(action==='new-object')openNewObjectDialog();else if(action==='templates')openTemplates();else if(action==='new-flow')newDiagram('flowchart','flowgorithm');else if(action==='new-dfd')newDiagram('dfd','dfd');else if(action==='new-erd')newDiagram('erd','sql');else if(action==='new-mindmap')window.location.href='?mindmap=1&new=1';else if(action==='open-json')openJson();else if(action==='save-share')openShareDialog();else if(action==='save-template')openSaveTemplateDialog();else if(action==='save-browser')saveBrowser();else if(action==='browser-projects')browserProjects();else if(action==='download-json')downloadJson();else if(action==='export-svg')exportSvg();else if(action==='export-png')exportPng();else if(action==='export-sql')openExportSqlDialog();else if(action==='export-python')exportCode('python');else if(action==='export-qcaa')exportCode('qcaa');else if(action==='export-gatton')exportCode('gatton');else if(action==='export-javascript')exportCode('javascript');else if(action==='print')window.print();else if(action==='render')renderFromSource({fit:false});else if(action==='run')toggleProgramRun();else if(action==='auto-layout')autoLayout();else if(action==='fit')fitDiagram();else if(action==='toggle-grid'){pushUndoSnapshot();project.settings.showGrid=!project.settings.showGrid;applyGrid();setDirty(true);}else if(action==='toggle-labels'){pushUndoSnapshot();project.settings.showEdgeLabels=!project.settings.showEdgeLabels;renderDiagram();setDirty(true);}else if(action==='zoom-in')zoom(1.2);else if(action==='zoom-out')zoom(.83);else if(action==='toggle-source')setSourcePanelVisible(!isSourcePanelVisible());else if(action==='syntax-help')showSyntaxHelp();else if(action==='about')showAbout();}
+function openCaptionCleanupDialog(){const root=showModal('Clear all existing captions',`<p><strong>Warning: irreversible live database change.</strong> This will erase captions from all saved Flowcharting projects and templates, including other users' diagrams. Back up the database first.</p><p>The administrator password is <code>$adminPassword</code> in <code>charter-config.php</code>.</p><div class="field"><label>Administrator password</label><input id="captionCleanupPassword" type="password" autocomplete="current-password"></div><div class="field"><label>Type CLEAR ALL CAPTIONS</label><input id="captionCleanupConfirm" autocomplete="off"></div><p id="captionCleanupStatus"></p>`,`<button data-cancel>Cancel</button><button class="primary" data-clear>Clear captions from database</button>`,true);root.querySelector('[data-cancel]').onclick=closeModal;root.querySelector('[data-clear]').onclick=async()=>{const pass=el('captionCleanupPassword').value,confirmText=el('captionCleanupConfirm').value;if(confirmText!=='CLEAR ALL CAPTIONS'||!pass){el('captionCleanupStatus').textContent='Enter password and confirmation phrase.';return;}if(!confirm('FINAL WARNING: Delete all existing Flowcharting captions from the live database?'))return;try{const result=await sendServerRequest('clear_captions',{password:pass,confirmText,confirmed:true});closeModal();toast('Caption cleanup completed: '+result.updatedRecords+' saved records updated.','success');}catch(error){el('captionCleanupStatus').textContent=error.message;}};}
+function handleAction(action){closeMenus();if(action==='new-object')openNewObjectDialog();else if(action==='templates')openTemplates();else if(action==='new-flow')newDiagram('flowchart','flowgorithm');else if(action==='new-dfd')newDiagram('dfd','dfd');else if(action==='new-erd')newDiagram('erd','sql');else if(action==='new-mindmap')window.location.href='?mindmap=1&new=1';else if(action==='open-json')openJson();else if(action==='save-share')openShareDialog();else if(action==='save-template')openSaveTemplateDialog();else if(action==='save-browser')saveBrowser();else if(action==='browser-projects')browserProjects();else if(action==='download-json')downloadJson();else if(action==='export-svg')exportSvg();else if(action==='export-png')exportPng();else if(action==='export-sql')openExportSqlDialog();else if(action==='export-python')exportCode('python');else if(action==='export-qcaa')exportCode('qcaa');else if(action==='export-gatton')exportCode('gatton');else if(action==='export-javascript')exportCode('javascript');else if(action==='print')window.print();else if(action==='render')renderFromSource({fit:false});else if(action==='run')toggleProgramRun();else if(action==='auto-layout')autoLayout();else if(action==='fit')fitDiagram();else if(action==='toggle-grid'){pushUndoSnapshot();project.settings.showGrid=!project.settings.showGrid;applyGrid();setDirty(true);}else if(action==='toggle-captions'){pushUndoSnapshot();project.settings.showCaptions=!project.settings.showCaptions;project.settings.showEdgeLabels=project.settings.showCaptions;renderDiagram();setDirty(true);toast(project.settings.showCaptions?'Captions enabled.':'Captions hidden.','success');}else if(action==='toggle-push-insertion'){pushUndoSnapshot();project.settings.pushOnInsertion=project.settings.pushOnInsertion===false;const item=document.querySelector('[data-action=\"toggle-push-insertion\"]');if(item)item.textContent=(project.settings.pushOnInsertion?'✓ ':'')+'Push On Insertion';setDirty(true);toast('Push On Insertion '+(project.settings.pushOnInsertion?'enabled':'disabled'),'success');}else if(action==='zoom-in')zoom(1.2);else if(action==='zoom-out')zoom(.83);else if(action==='toggle-source')setSourcePanelVisible(!isSourcePanelVisible());else if(action==='syntax-help')showSyntaxHelp();else if(action==='about')showAbout();}
 document.querySelectorAll('[data-action]').forEach(button=>button.addEventListener('click',event=>{event.stopPropagation();handleAction(button.getAttribute('data-action'));}));
 
 function isSourcePanelVisible(){return !document.body.classList.contains('source-panel-hidden');}
@@ -6742,58 +6984,52 @@ initialise();
 })();
 </script>
 <script>
-/* Common Charter 0.0.3 panel management for flowcharts, DFDs, ERDs and mind maps. */
+/* Charter 0.0.4: unified independent horizontal panel resizing and View visibility. */
 (()=>{
  'use strict';
- const map={settings:document.getElementById('charterSettingsPanel'),source:document.getElementById('sourcePanel'),controls:document.getElementById('controlsPanel')||document.querySelector('.left-panel'),inspector:document.getElementById('inspectorPanel')||document.getElementById('rightPanel'),canvas:document.getElementById('canvasShell')};
- const workspace=document.querySelector('.workspace');
- if(!workspace||!map.settings)return;
+ const workspace=document.querySelector('.workspace');if(!workspace)return;
+ const style=document.createElement('style');style.textContent='.charter-v004-divider{position:absolute;z-index:40;width:7px;cursor:col-resize;background:transparent;touch-action:none}.charter-v004-divider:hover,.charter-v004-divider:active{background:rgba(33,125,197,.25)}.workspace{position:relative}.charter-view-hidden{display:none!important}';document.head.appendChild(style);
  const mind=!!document.getElementById('mapSvg');
- const defaults=mind?{settings:44,source:0,controls:220,inspector:304}:{settings:44,source:390,controls:190,inspector:270};
- const sizes={...defaults};
- const hidden=new Set(mind?['source']:[]);
- function refresh(){
-   for(const [key,node] of Object.entries(map))if(node)node.classList.toggle('charter-view-hidden',hidden.has(key));
+ const map={settings:document.getElementById('charterSettingsPanel'),source:document.getElementById('sourcePanel'),controls:document.getElementById('controlsPanel')||document.querySelector('.left-panel'),canvas:document.getElementById('canvasShell'),inspector:document.getElementById('inspectorPanel')||document.getElementById('rightPanel')};
+ if(!map.settings)return;
+ const order=mind?['controls','canvas','inspector']:['source','controls','canvas','inspector'];
+ const defaults=mind?{source:0,controls:220,inspector:304,settings:44}:{source:390,controls:190,inspector:270,settings:44};
+ let sizes={...defaults};let hidden=new Set(mind?['source']:[]);
+ try{const saved=JSON.parse(localStorage.getItem('charter.panels.v004')||'null');if(saved){sizes={...sizes,...saved.sizes};hidden=new Set(saved.hidden||[]);}}catch(_){}
+ const name={settings:'Diagram settings',source:'Diagram source',controls:mind?'Navigator / Outline':'Controls',canvas:'Canvas',inspector:'Inspector'};
+ function refresh(persist=true){
+   for(const [k,node] of Object.entries(map))if(node)node.classList.toggle('charter-view-hidden',hidden.has(k));
+   document.body.classList.toggle('source-panel-hidden',hidden.has('source'));
    document.documentElement.style.setProperty('--charter-settings-height',hidden.has('settings')?'0px':sizes.settings+'px');
-   const parts=mind?['controls','canvas','inspector']:['source','controls','canvas','inspector'];
-   const widths=parts.map(k=>hidden.has(k)?'0px':k==='canvas'?'minmax(0,1fr)':sizes[k]+'px');
-   workspace.style.setProperty('grid-template-columns',widths.join(' '),'important');
-   for(const button of document.querySelectorAll('[data-charter-view]')){
-      const k=button.dataset.charterView;
-      button.textContent=(hidden.has(k)?'□ ':'✓ ')+({settings:'Diagram settings',source:'Diagram source',controls:mind?'Navigator / Outline':'Controls',inspector:'Inspector',canvas:'Canvas'}[k]||k);
-   }
+   workspace.style.setProperty('grid-template-columns',order.map(k=>hidden.has(k)?'0px':k==='canvas'?'minmax(0,1fr)':sizes[k]+'px').join(' '),'important');
+   for(const b of document.querySelectorAll('[data-charter-view]')){const k=b.dataset.charterView;b.textContent=(hidden.has(k)?'':'✓ ')+(name[k]||k);b.setAttribute('aria-checked',String(!hidden.has(k)));}
+   if(persist)try{localStorage.setItem('charter.panels.v004',JSON.stringify({sizes,hidden:[...hidden]}));}catch(_){}
    window.dispatchEvent(new Event('resize'));
  }
- function reset(){Object.assign(sizes,defaults);hidden.clear();if(mind)hidden.add('source');
-    document.body.classList.remove('source-panel-hidden');
-    for(const key of ['sourcePanelWidth','controlsPanelWidth','inspectorPanelWidth'])try{localStorage.removeItem('charter.'+key)}catch(_){}
-    document.documentElement.style.removeProperty('--source-width');document.documentElement.style.removeProperty('--controls-width');document.documentElement.style.removeProperty('--inspector-width');
-    refresh();}
- function addGrip(node,edge,key,isY=false){if(!node)return;
-   if(getComputedStyle(node).position==='static')node.style.position='relative';
-   const grip=document.createElement('div');grip.className=isY?'charter-toolbar-grip':'charter-panel-grip'+(edge==='left'?' left-edge':'');grip.title='Drag to resize; double-click to reset all panels';node.appendChild(grip);
-   let start=null;
-   grip.addEventListener('pointerdown',e=>{if(e.button!==0)return;e.preventDefault();e.stopPropagation();start={pointerId:e.pointerId,pos:isY?e.clientY:e.clientX,size:sizes[key]};grip.setPointerCapture(e.pointerId)});
-   grip.addEventListener('pointermove',e=>{if(!start||e.pointerId!==start.pointerId)return;const delta=(isY?e.clientY:e.clientX)-start.pos;sizes[key]=Math.round(Math.max(isY?34:140,Math.min(isY?240:900,start.size+delta*(edge==='left'?-1:1))));refresh()});
-   grip.addEventListener('pointerup',()=>{start=null});grip.addEventListener('pointercancel',()=>{start=null});
-   grip.addEventListener('dblclick',e=>{e.stopPropagation();reset()});
+ function reset(){sizes={...defaults};hidden=new Set(mind?['source']:[]);refresh();}
+ function resizePair(a,b,delta){
+   const aWas=hidden.has(a)?0:sizes[a],bWas=hidden.has(b)?0:(b==='canvas'?Math.max(120,map.canvas?.getBoundingClientRect().width||400):sizes[b]);
+   let newA=Math.max(0,aWas+delta),newB=Math.max(0,bWas-delta);
+   if(newA<55)newA=0;if(newB<55)newB=0;
+   if(newA===0)hidden.add(a);else{hidden.delete(a);sizes[a]=Math.round(newA);}
+   if(newB===0)hidden.add(b);else{hidden.delete(b);if(b!=='canvas')sizes[b]=Math.round(newB);}
+   refresh();
  }
- addGrip(map.settings,'bottom','settings',true);
- if(mind){addGrip(map.controls,'right','controls');addGrip(map.inspector,'left','inspector')}
- // Existing Charter source/controls/inspector panels already have their own width handles.
- for(const node of Object.values(map))if(node)node.addEventListener('dblclick',e=>{
-   if(e.target.closest('input,textarea,select,button,svg,[contenteditable],.node,.diagram-node'))return;
-   if(e.target.closest('.panel-head,.panel-header,.charter-toolbar-grip,.charter-panel-grip'))reset();
- });
- document.addEventListener('click',e=>{
-   const toggle=e.target.closest('[data-charter-view]');
-   if(toggle){e.preventDefault();e.stopImmediatePropagation();const key=toggle.dataset.charterView;if(hidden.has(key))hidden.delete(key);else hidden.add(key);if(key==='source')document.body.classList.toggle('source-panel-hidden',hidden.has('source'));refresh();return}
-   if(e.target.closest('[data-charter-reset]')){e.preventDefault();e.stopImmediatePropagation();reset()}
- },true);
- if(!mind){const previous=document.querySelector('[data-action="toggle-source"]');if(previous)previous.addEventListener('click',()=>{setTimeout(()=>{if(document.body.classList.contains('source-panel-hidden'))hidden.add('source');else hidden.delete('source');refresh()},0)})}
- // Do not overwrite URL-driven source visibility.
- if(!mind){const hiddenSource=document.body.classList.contains('source-panel-hidden')||new URLSearchParams(location.search).get('source')==='hide';if(hiddenSource)hidden.add('source')}
- refresh();
+ // Dividers are independent of panel contents, so a panel can be reopened after collapsing.
+ const grips=[];
+ for(let i=0;i<order.length-1;i++){
+   const a=order[i],b=order[i+1],grip=document.createElement('div');grip.className='charter-v004-divider';grip.title='Drag to resize or collapse either panel; double-click to reset all panels';workspace.appendChild(grip);grips.push({a,b,grip});
+   let start=null;grip.addEventListener('pointerdown',e=>{if(e.button!==0)return;e.preventDefault();start={id:e.pointerId,x:e.clientX,aWidth:hidden.has(a)?0:map[a].getBoundingClientRect().width,bWidth:hidden.has(b)?0:map[b].getBoundingClientRect().width};grip.setPointerCapture(e.pointerId);});
+   grip.addEventListener('pointermove',e=>{if(!start||e.pointerId!==start.id)return;const delta=e.clientX-start.x;const aw=Math.max(0,start.aWidth+delta),bw=Math.max(0,start.bWidth-delta);hidden[aw<55?'add':'delete'](a);hidden[bw<55?'add':'delete'](b);if(aw>=55&&a!=='canvas')sizes[a]=Math.round(aw);if(bw>=55&&b!=='canvas')sizes[b]=Math.round(bw);refresh();});
+   grip.addEventListener('pointerup',()=>{start=null});grip.addEventListener('pointercancel',()=>{start=null});grip.addEventListener('dblclick',e=>{e.preventDefault();reset()});
+ }
+ const originalHandles=['sourceResizeHandle','controlsResizeHandle','inspectorResizeHandle'];for(const id of originalHandles){const el=document.getElementById(id);if(el)el.style.display='none';}
+ function positionGrips(){const rect=workspace.getBoundingClientRect();grips.forEach(({a,grip},i)=>{let x=0;for(let j=0;j<=i;j++){const key=order[j];if(!hidden.has(key))x+=map[key]?.getBoundingClientRect().width||0;}grip.style.left=Math.max(0,x-3)+'px';grip.style.top='0';grip.style.height='100%';});}
+ const observer=new ResizeObserver(positionGrips);observer.observe(workspace);order.forEach(k=>map[k]&&observer.observe(map[k]));
+ document.addEventListener('click',e=>{const b=e.target.closest('[data-charter-view]');if(b){e.preventDefault();e.stopImmediatePropagation();const k=b.dataset.charterView;hidden[hidden.has(k)?'delete':'add'](k);refresh();return;}if(e.target.closest('[data-charter-reset]')){e.preventDefault();e.stopImmediatePropagation();reset();}},true);
+ document.addEventListener('dblclick',e=>{if(e.target.closest('.charter-v004-divider'))reset();});
+ const toggle=document.querySelector('[data-action="toggle-source"]');if(toggle)toggle.addEventListener('click',()=>{setTimeout(()=>{hidden[document.body.classList.contains('source-panel-hidden')?'add':'delete']('source');refresh();},0)});
+ refresh(false);
 })();
 </script>
 </body>

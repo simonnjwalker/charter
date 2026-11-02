@@ -1,3 +1,10 @@
+## [0.0.4] - 2026-10-29
+### Fixed
+- Drag-and-drop goes to the next item
+- IF controls have a button to switch true and false
+### Removed
+- Captions for controls are turned off
+
 ## [0.0.3] - 2026-10-21
 ### Added
 - Can run flowcharts
