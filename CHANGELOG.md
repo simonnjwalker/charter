@@ -1,3 +1,9 @@
+## [0.0.5] - 2026-11-02
+### Added
+- Conditional controls (IF/WHILE/FOR) show True/False in connectors by default
+### Fixed
+- Python export now accounts for datatypes and makes explicit conversion
+
 ## [0.0.4] - 2026-10-29
 ### Fixed
 - Drag-and-drop goes to the next item
