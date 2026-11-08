@@ -1,10 +1,10 @@
 <?php
-/* Charter 0.0.5: fourth diagram type, Mind Map. The original MindCanvas editor
+/* Charter 0.0.6: fourth diagram type, Mind Map. The original MindCanvas editor
  * runs under this router, sharing Charter's configuration and PHP entrypoint. */
 
-/** Charter 0.0.5 unified schema bootstrap. Idempotent on each request. */
+/** Charter 0.0.6 unified schema bootstrap. Idempotent on each request. */
 function charter_schema_bootstrap($db) {
-    // Deliberately disabled for version 0.0.5: this application contains live data.
+    // Deliberately disabled for version 0.0.6: this application contains live data.
     // Database migrations require separate review and explicit administrator approval.
     throw new RuntimeException('Automatic database schema changes are disabled on live data.');
 }
@@ -1317,7 +1317,7 @@ a{color:inherit}.landing-top{background:linear-gradient(180deg,var(--navy),var(-
 </head>
 <body>
 <header class="landing-top"><div class="landing-brand"><span class="landing-mark"></span><span>Charter · Mind Map</span><label style="font-size:12px;margin-left:15px;color:#fff">Diagram
-<select aria-label="Diagram type" onchange="if(this.value!=='mindmap'){if(window.confirm('Open a new diagram? Unsaved changes may be lost.'))window.location.href='?new='+encodeURIComponent(this.value);else this.value='mindmap';}" style="padding:5px 8px;border-radius:4px"><option value="flowchart">Flowchart</option><option value="dfd">DFD</option><option value="erd">ERD</option><option value="mindmap" selected>MindCanvas · Mind map</option></select></label><a href="charter.php" style="font-size:12px;color:#fff;margin-left:15px;text-decoration:none;border:1px solid #68727d;padding:6px 9px;border-radius:5px">← All diagrams</a></div></header>
+<select aria-label="Diagram type" onchange="if(this.value!=='mindmap'){if(window.confirm('Open a new diagram? Unsaved changes may be lost.'))window.location.href='?new='+encodeURIComponent(this.value);else this.value='mindmap';}" style="padding:5px 8px;border-radius:4px"><option value="flowchart">Flowchart</option><option value="dfd">DFD</option><option value="erd">ERD</option><option value="mindmap" selected>Mindmap</option></select></label><a href="charter.php" style="font-size:12px;color:#fff;margin-left:15px;text-decoration:none;border:1px solid #68727d;padding:6px 9px;border-radius:5px">← All diagrams</a></div></header>
 <main class="landing-main">
     <section class="hero">
         <div><h1>Choose a mind-map template</h1><p>Start with a structured map for planning, learning, analysis or creative work. Each template opens as an independent editable project.</p></div>
@@ -1532,6 +1532,15 @@ kbd { font-size:11px; color:#65717d; background:#f1f3f5; border:1px solid #d5d9d
     #mapSvg { width:100vw; height:100vh; }
 }
 
+/* Canvas selection mode (only changes Flowchart/DFD/ERD canvas behaviour). */
+.charter-interaction-switch{display:inline-flex;flex:none;align-items:center;gap:0;border:1px solid #a9b8c5;border-radius:5px;overflow:hidden;background:#fff}
+.charter-interaction-switch .tool-btn{min-width:52px;border:0;border-radius:0;padding:0 9px;white-space:nowrap}
+.charter-interaction-switch .tool-btn+.tool-btn{border-left:1px solid #a9b8c5}
+.charter-interaction-switch .tool-btn.charter-interaction-active{background:#256d9d;color:white;font-weight:700}
+.charter-marquee{fill:rgba(36,117,168,.12);stroke:#2475a8;stroke-width:1.5;stroke-dasharray:6 4;vector-effect:non-scaling-stroke;pointer-events:none}
+#diagramSvg.charter-select-mode .node{cursor:crosshair!important}
+#diagramSvg.charter-select-mode{cursor:crosshair!important}
+
 /* Unified resizable panels / view controls for all four Charter diagrams */
 .app{grid-template-rows:46px var(--charter-settings-height,44px) minmax(0,1fr) 27px!important}
 .toolbar{position:relative;overflow:auto;resize:none;min-height:33px;max-height:180px;align-content:start;flex-wrap:wrap}
@@ -1550,7 +1559,7 @@ kbd { font-size:11px; color:#65717d; background:#f1f3f5; border:1px solid #d5d9d
 <div class="app">
     <header class="topbar">
         <div class="brand"><span class="brand-mark"></span><span>Charter · Mind Map</span><label style="font-size:12px;margin-left:15px;color:#fff">Diagram
-<select aria-label="Diagram type" onchange="if(this.value!=='mindmap'){if(window.confirm('Open a new diagram? Unsaved changes may be lost.'))window.location.href='?new='+encodeURIComponent(this.value);else this.value='mindmap';}" style="padding:5px 8px;border-radius:4px"><option value="flowchart">Flowchart</option><option value="dfd">DFD</option><option value="erd">ERD</option><option value="mindmap" selected>MindCanvas · Mind map</option></select></label><a href="charter.php" style="font-size:12px;color:#fff;margin-left:15px;text-decoration:none;border:1px solid #68727d;padding:6px 9px;border-radius:5px">← All diagrams</a></div>
+<select aria-label="Diagram type" onchange="if(this.value!=='mindmap'){if(window.confirm('Open a new diagram? Unsaved changes may be lost.'))window.location.href='?new='+encodeURIComponent(this.value);else this.value='mindmap';}" style="padding:5px 8px;border-radius:4px"><option value="flowchart">Flowchart</option><option value="dfd">DFD</option><option value="erd">ERD</option><option value="mindmap" selected>Mindmap</option></select></label><a href="charter.php" style="font-size:12px;color:#fff;margin-left:15px;text-decoration:none;border:1px solid #68727d;padding:6px 9px;border-radius:5px">← All diagrams</a></div>
         <nav class="menu-strip">
             <div class="menu"><button type="button">File</button><div class="dropdown">
                 <button data-action="new">New <kbd>Ctrl+N</kbd></button>
@@ -3066,7 +3075,7 @@ initialiseApplication();
 })();
 </script>
 <script>
-/* Common Charter 0.0.5 panel management for flowcharts, DFDs, ERDs and mind maps. */
+/* Common Charter 0.0.6 panel management for flowcharts, DFDs, ERDs and mind maps. */
 (()=>{
  'use strict';
  const map={settings:document.getElementById('charterSettingsPanel'),source:document.getElementById('sourcePanel'),controls:document.getElementById('controlsPanel')||document.querySelector('.left-panel'),inspector:document.getElementById('inspectorPanel')||document.getElementById('rightPanel'),canvas:document.getElementById('canvasShell')};
@@ -3126,7 +3135,7 @@ initialiseApplication();
 <?php
 /*
  * Charter - single-file diagram editor for flowcharts, DFDs, ERDs and MindCanvas mind maps.
- * Application version 0.0.5
+ * Application version 0.0.6
  * -------------------------
  *
  * Keep charter-config.php in the same directory as this file.
@@ -4352,7 +4361,7 @@ if ($showLanding) {
 *{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden}body{font-family:Inter,"Segoe UI",Arial,sans-serif;color:var(--ink);background:var(--canvas);font-size:14px}button,input,select,textarea{font:inherit}.hidden{display:none!important}.app{height:100%;display:grid;grid-template-rows:48px 45px minmax(0,1fr) 28px}.topbar{display:flex;align-items:center;gap:14px;padding:0 13px;color:#fff;background:linear-gradient(180deg,var(--top),var(--top2));box-shadow:0 1px 5px rgba(0,0,0,.38);z-index:30}.brand{display:flex;align-items:center;gap:8px;font-weight:800;font-size:16px}.brand-mark{width:28px;height:28px;border-radius:7px;background:linear-gradient(145deg,#ffbd52,#e4800c);position:relative}.brand-mark:before{content:"";position:absolute;width:16px;height:3px;left:6px;top:7px;background:#fff;box-shadow:0 6px 0 #fff,0 12px 0 #fff}.brand-mark:after{content:"";position:absolute;width:3px;height:16px;left:12px;top:6px;background:#fff}.menu-strip{display:flex;height:100%}.menu{position:relative}.menu>button{height:100%;border:0;background:transparent;color:#e8edf1;padding:0 10px;cursor:pointer}.menu>button:hover,.menu.open>button{background:rgba(255,255,255,.1)}.dropdown{display:none;position:absolute;top:45px;left:0;min-width:240px;padding:6px;background:#fff;color:var(--ink);border:1px solid #c7ced5;border-radius:5px;box-shadow:var(--shadow);z-index:200}.menu.open .dropdown{display:block}.dropdown button{display:flex;justify-content:space-between;width:100%;border:0;background:transparent;padding:8px 10px;border-radius:4px;text-align:left;color:var(--ink);cursor:pointer}.dropdown button:hover{background:#edf2f6}.dropdown hr{border:0;border-top:1px solid #e1e5e9;margin:5px 0}.nested-menu{position:relative}.nested-menu>button:after{content:'›';font-size:18px;line-height:1}.nested-menu-panel{display:none;position:absolute;left:100%;top:-6px;min-width:220px;padding:6px;background:#fff;border:1px solid #c7ced5;border-radius:5px;box-shadow:var(--shadow);z-index:210}.nested-menu:hover>.nested-menu-panel,.nested-menu:focus-within>.nested-menu-panel{display:block}kbd{font-size:10px;color:#69747f;border:1px solid #d2d7dc;border-bottom-width:2px;border-radius:3px;background:#f1f3f5;padding:1px 4px}.title-wrap{margin-left:auto;display:flex;align-items:center;gap:8px;min-width:200px;max-width:470px;flex:1;justify-content:flex-end}.unsaved-dot{width:8px;height:8px;border-radius:50%;background:#ffb43e;opacity:0}.unsaved-dot.show{opacity:1}#diagramTitle{width:min(100%,350px);background:rgba(255,255,255,.09);color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:4px;padding:6px 9px;outline:none}.toolbar{display:flex;align-items:center;gap:5px;padding:5px 8px;background:#e7ecf0;border-bottom:1px solid #c4ccd3;overflow-x:auto;z-index:20}.toolbar label{font-size:11px;color:#53616d}.toolbar select{height:33px;border:1px solid #b9c3cb;border-radius:4px;background:#fff;padding:0 7px}.tool-btn{height:33px;min-width:34px;border:1px solid transparent;border-radius:4px;background:transparent;color:#26333e;cursor:pointer;padding:0 9px}.tool-btn:hover{background:#fff;border-color:#c4cbd2}.tool-btn:disabled{opacity:.45;cursor:not-allowed}.sep{width:1px;height:27px;background:#c4ccd2;margin:0 4px}.zoom-readout{min-width:49px;text-align:center;font-size:12px;color:#53616d}.workspace{min-height:0;display:grid;grid-template-columns:var(--source-width) var(--controls-width,190px) minmax(320px,1fr) var(--inspector-width,270px)}.panel{min-height:0;background:var(--panel);z-index:10}.source-panel{border-right:1px solid var(--line);display:flex;flex-direction:column;position:relative}.source-resize-handle{position:absolute;top:0;right:-5px;bottom:0;width:10px;cursor:col-resize;z-index:25;background:transparent}.source-resize-handle:hover,.source-resize-handle.active{background:rgba(36,117,168,.18)}.controls-panel{border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden;position:relative}.controls-resize-handle{position:absolute;top:0;right:-5px;bottom:0;width:10px;cursor:col-resize;z-index:25;background:transparent}.controls-resize-handle:hover,.controls-resize-handle.active{background:rgba(36,117,168,.18)}.control-palette{padding:8px;overflow:auto;display:flex;flex-direction:column;gap:7px}.control-item{display:grid;grid-template-columns:42px minmax(0,1fr);gap:8px;align-items:center;width:100%;padding:7px;border:1px solid #cbd3da;border-radius:6px;background:#fff;color:#263640;text-align:left;cursor:grab;user-select:none}.control-item:hover{background:#eef5fa;border-color:#8eb5cf}.control-item:active{cursor:grabbing}.control-palette.flowgorithm-palette{display:block;padding:8px 7px 12px}.flowgorithm-statement-header{background:#a9c9f2;border:1px solid #6187b4;padding:7px 9px;margin-bottom:10px;font-size:12px;color:#172b41}.flowgorithm-groups{display:grid;grid-template-columns:repeat(4,minmax(72px,1fr));gap:8px}.flow-control-group{min-width:0}.flow-control-group-title{text-align:center;font-size:11px;color:#192633;margin:0 0 8px;white-space:nowrap}.flowgorithm-palette .control-item{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:4px;border:0;background:transparent;padding:3px 1px;cursor:grab}.flowgorithm-palette .control-item:hover{background:#f0f4f7;border-color:transparent}.flowgorithm-palette .control-label{display:none}.flowgorithm-palette .control-icon{width:78px;height:34px;font-size:11px;font-weight:500;color:#111}.flowgorithm-palette .control-icon.fg-input{border-width:2px;background:#b0e0ff;border-color:#5080a0;transform:skew(-24deg)}.flowgorithm-palette .control-icon.fg-input span{transform:skew(24deg)}.flowgorithm-palette .control-icon.fg-output{border-width:2px;background:#d0ffd0;border-color:#70a070;transform:skew(-24deg)}.flowgorithm-palette .control-icon.fg-output span{transform:skew(24deg)}.flowgorithm-palette .control-icon.fg-declare{width:78px;height:34px;clip-path:none;border:2px solid #a0a070;background:#ffffd0}.flowgorithm-palette .control-icon.fg-declare:before{content:"";position:absolute;left:8px;top:0;bottom:0;border-left:1px solid #a0a070}.flowgorithm-palette .control-icon.fg-assign{width:78px;height:34px;border:2px solid #a0a070;background:#ffffd0}.flowgorithm-palette .control-icon.fg-if{width:58px;height:34px;border:1px solid #a07070;background:#ffd0d0;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);transform:none;margin-left:0}.flowgorithm-palette .control-icon.fg-if span{transform:none}.flowgorithm-palette .control-icon.fg-call{border:1px solid #9070a0;background:#f0e0ff}.flowgorithm-palette .control-icon.fg-call:before,.flowgorithm-palette .control-icon.fg-call:after{background:#9070a0;width:1px}.flowgorithm-palette .control-icon.fg-loop{border:1px solid #a08040;background:#ffe0a0;clip-path:polygon(14% 0,86% 0,100% 50%,86% 100%,14% 100%,0 50%)}.control-palette.flowgorithm-palette{display:flex;flex-direction:column;gap:8px;padding:8px}.flowgorithm-groups{display:flex;flex-direction:column;gap:10px}.flow-control-group{display:flex;flex-direction:column;gap:5px}.flow-control-group-title{text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.35px;color:#65727d;margin:2px 2px 1px}.flowgorithm-palette .control-item{display:grid;grid-template-columns:84px minmax(0,1fr);gap:8px;align-items:center;justify-content:stretch;width:100%;padding:6px 7px;border:1px solid #d1d8de;border-radius:6px;background:#fff;cursor:grab}.flowgorithm-palette .control-item:hover{background:#f0f4f7;border-color:#9bb6c8}.flowgorithm-palette .control-label{display:block}.flowgorithm-palette .control-label strong{font-size:12px;font-weight:600}.flowgorithm-palette .control-icon{justify-self:center}.control-icon{width:38px;height:31px;display:flex;align-items:center;justify-content:center;position:relative;color:#29485d;font-weight:800}.control-icon.process{border:2px solid #58758a;border-radius:3px;background:#fff}.control-icon.decision{width:27px;height:27px;border:2px solid #c27b18;background:#fff8e8;transform:rotate(45deg);margin-left:5px}.control-icon.decision span{transform:rotate(-45deg)}.control-icon.io{width:34px;height:27px;border:2px solid #3d83b6;background:#eef7ff;transform:skew(-12deg)}.control-icon.terminator{border:2px solid #358d57;border-radius:18px;background:#edf9f1}.control-icon.stop-sign{width:38px;height:38px;border:2px solid #8b2b25;background:#ffd7d3;clip-path:polygon(30% 0,70% 0,100% 30%,100% 70%,70% 100%,30% 100%,0 70%,0 30%)}.control-icon.rounded{border:2px solid #7255a5;border-radius:8px;background:#f6f2ff}.control-icon.dfd-process{border:2px solid #222;border-radius:8px;background:#d3d3d3}.control-icon.entity{border:2px solid #222;background:#d0d0d0;box-shadow:-5px -5px 0 -2px #d0d0d0,-5px -5px 0 0 #222}.control-icon.store{border:2px solid #222;background:#fff}.control-icon.store:before{content:attr(data-kind);width:12px;border-right:2px solid #222;height:100%;display:flex;align-items:center;justify-content:center;font-size:10px}.control-icon.table{border:2px solid #496b83;border-radius:3px;background:linear-gradient(#365d78 0 10px,#fff 10px)}.control-icon.textbox{font-size:22px;border:1px dashed #8a98a3;background:#fff}.control-icon.fg-assign{border:2px solid #a0a070;border-radius:2px;background:#ffffd0}.control-icon.fg-declare{width:34px;height:27px;background:#ffffd0;border:2px solid #a0a070;clip-path:polygon(12% 0,88% 0,100% 50%,88% 100%,12% 100%,0 50%)}.control-icon.fg-input{width:34px;height:27px;border:2px solid #5080a0;background:#b0e0ff;transform:skew(-12deg)}.control-icon.fg-output{width:34px;height:27px;border:2px solid #70a070;background:#d0ffd0;transform:skew(12deg)}.control-icon.fg-if{width:27px;height:27px;border:2px solid #a07070;background:#ffd0d0;transform:rotate(45deg);margin-left:5px}.control-icon.fg-if span{transform:rotate(-45deg)}.control-icon.fg-loop{width:34px;height:27px;border:2px solid #a08040;background:#ffe0a0;clip-path:polygon(14% 0,86% 0,100% 50%,86% 100%,14% 100%,0 50%)}.control-icon.fg-call{border:2px solid #9070a0;background:#f0e0ff}.control-icon.fg-call:before,.control-icon.fg-call:after{content:"";position:absolute;top:0;bottom:0;width:2px;background:#9070a0}.control-icon.fg-call:before{left:7px}.control-icon.fg-call:after{right:7px}.control-icon.fg-comment{border:1px dashed #8c8458;background:#fffde8;font-size:10px;color:#6e6743}.control-label strong{display:block;font-size:12px}.control-label small{display:block;color:#6a7781;font-size:10px;line-height:1.25;margin-top:2px}.right-panel{border-left:1px solid var(--line);overflow:auto;position:relative}.inspector-resize-handle{position:absolute;top:0;left:-5px;bottom:0;width:10px;cursor:col-resize;z-index:25;background:transparent}.inspector-resize-handle:hover,.inspector-resize-handle.active{background:rgba(36,117,168,.18)}.panel-head{height:39px;display:flex;align-items:center;justify-content:space-between;padding:0 10px;background:#e7ebef;border-bottom:1px solid var(--line);font-weight:750;color:#34424e}.source-meta{padding:9px 10px;border-bottom:1px solid var(--line);background:#f5f7f9;color:#5d6a75;font-size:12px;line-height:1.4}.editor-wrap{position:relative;flex:1;min-height:0;background:#17212b}.line-numbers{position:absolute;left:0;top:0;bottom:0;width:43px;padding:11px 7px;color:#72808d;background:#111920;text-align:right;font:13px/1.55 Consolas,"Courier New",monospace;white-space:pre;overflow:hidden;user-select:none;border-right:1px solid #2d3943}.source-editor{position:absolute;inset:0 0 0 43px;width:calc(100% - 43px);height:100%;resize:none;border:0;outline:0;padding:11px 12px;background:#17212b;color:#e4ebf0;caret-color:#ffb33f;tab-size:2;font:13px/1.55 Consolas,"Courier New",monospace;white-space:pre;overflow:auto}.source-footer{padding:7px 9px;border-top:1px solid var(--line);background:#eef2f5}.parse-status{min-height:19px;color:#52616c;font-size:12px}.parse-status.error{color:#a8332a}.canvas-shell{position:relative;min-width:0;min-height:0;overflow:hidden;background-color:var(--canvas);background-image:radial-gradient(#c5ced6 1px,transparent 1px);background-size:20px 20px}.canvas-shell.no-grid{background-image:none}#diagramSvg{width:100%;height:100%;display:block;touch-action:none;cursor:grab;user-select:none}#diagramSvg.panning{cursor:grabbing}.node{cursor:move}.node .body{filter:drop-shadow(0 1px 1px rgba(0,0,0,.17))}.node.selected .selection{display:block}.selection{display:none;fill:none;stroke:#e74c3c;stroke-width:2;stroke-dasharray:6 4;vector-effect:non-scaling-stroke}.edge{fill:none;stroke:#000;stroke-width:3;vector-effect:non-scaling-stroke;pointer-events:none}.edge.hovered{stroke:#e74c3c}.edge.drop-target{stroke:#e00000!important;stroke-width:5!important;filter:drop-shadow(0 0 3px rgba(224,0,0,.7))}.edge.selected{stroke:#e74c3c;stroke-width:3;stroke-dasharray:8 5;animation:edgeMarch .65s linear infinite}@keyframes edgeMarch{to{stroke-dashoffset:-13}}.edge-hit{fill:none;stroke:transparent;stroke-width:36;vector-effect:non-scaling-stroke;pointer-events:stroke;cursor:pointer}.flow-insert-arrow{cursor:pointer}.flow-insert-arrow .flow-insert-halo{fill:#fff;fill-opacity:.96;stroke:#d94138;stroke-width:1.6;vector-effect:non-scaling-stroke}.flow-insert-arrow:hover .flow-insert-halo{fill:#fff1ef;stroke:#b62822;stroke-width:2}.relationship-cardinality{pointer-events:none}.relationship-cardinality.selected line,.relationship-cardinality.selected circle{stroke:#e74c3c}.edge-label{cursor:pointer}.edge-label rect{fill:rgba(255,255,255,.92);stroke:#d2d9df;stroke-width:1}.edge-label.selected rect{stroke:#e74c3c;stroke-width:1.5}.edge-label text{pointer-events:none}.canvas-hint{position:absolute;left:12px;bottom:12px;padding:6px 9px;border:1px solid #c9d1d8;border-radius:4px;background:rgba(255,255,255,.88);color:#64727d;font-size:12px;pointer-events:none}.loading-cover{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(238,242,245,.88);z-index:20;font-size:16px;font-weight:750;color:#435260}.inspector{padding:12px}.empty{padding:30px 16px;text-align:center;color:var(--muted)}.info-card{border:1px solid #d3dae0;border-radius:6px;background:#fff;margin-bottom:11px;overflow:hidden}.info-card h3{font-size:13px;margin:0;padding:9px 10px;background:#edf1f4;border-bottom:1px solid #d7dde2}.info-body{padding:10px}.field{display:grid;grid-template-columns:86px minmax(0,1fr);gap:7px;align-items:center;margin-bottom:8px}.field:last-child{margin-bottom:0}.field label{font-size:11px;color:#5d6a75}.field input,.field select,.field textarea{width:100%;border:1px solid #bcc6ce;border-radius:4px;padding:5px 6px;background:#fff}.field .multiline-field{display:grid!important;grid-template-columns:minmax(0,1fr) 32px!important;grid-template-rows:auto!important;gap:6px!important;align-items:start!important;width:100%!important;max-width:100%!important;min-width:0!important;box-sizing:border-box!important;grid-column:2!important}.field .multiline-field>textarea{display:block!important;grid-column:1!important;grid-row:1!important;width:100%!important;min-width:0!important;max-width:100%!important;box-sizing:border-box!important;height:32px;min-height:32px;resize:none;overflow:hidden;white-space:pre-wrap}.field .multiline-field>.multiline-toggle{display:flex!important;grid-column:2!important;grid-row:1!important;justify-self:end!important;align-items:center!important;justify-content:center!important;width:32px!important;min-width:32px!important;max-width:32px!important;height:32px!important;min-height:32px!important;margin:0!important;padding:2px!important;box-sizing:border-box!important}.field .multiline-field>textarea[rows]:not([rows="1"]){height:110px!important;min-height:110px!important;resize:vertical!important;overflow:auto!important}.field input[type=color]{height:31px;padding:2px}.recent-colours-block{margin-top:8px;padding-top:8px;border-top:1px solid #e0e5e9}.recent-colours-title{font-size:11px;color:#5d6a75;margin-bottom:6px}.recent-colours{display:flex;gap:6px;flex-wrap:wrap;min-height:25px;align-items:center}.recent-colour{width:25px!important;height:25px!important;min-width:25px;padding:0!important;border:1px solid #8f9aa3!important;border-radius:4px!important;box-shadow:inset 0 0 0 1px rgba(255,255,255,.45);cursor:pointer}.recent-colours-empty{font-size:10px;color:#84909a}.format-checks{display:flex;gap:8px;flex-wrap:wrap;font-size:11px;color:#53616d}.format-checks label{display:flex;align-items:center;gap:3px}.format-checks input{width:auto}.floating-text{cursor:move}.floating-text text{pointer-events:none}.floating-text .text-hit{fill:rgba(255,255,255,.001);stroke:none;pointer-events:all}.floating-text .text-selection{display:none;fill:none;stroke:#e74c3c;stroke-width:1.5;stroke-dasharray:5 3;vector-effect:non-scaling-stroke;pointer-events:none}.floating-text.selected .text-selection{display:block}.mini-actions{display:flex;gap:5px;flex-wrap:wrap}.mini-btn{border:1px solid #bec7cf;border-radius:4px;background:#fff;padding:6px 8px;cursor:pointer}.mini-btn:hover{background:#edf2f6}.syntax-help{font-size:12px;line-height:1.5;color:#53616d}.syntax-help code{display:block;white-space:pre-wrap;background:#17212b;color:#dce5eb;padding:8px;border-radius:4px;margin-top:6px;font-family:Consolas,"Courier New",monospace}.statusbar{display:flex;align-items:center;gap:18px;padding:0 10px;background:#dfe5e9;border-top:1px solid #c3cbd2;color:#52606b;font-size:12px}.statusbar .grow{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.modal-backdrop{position:fixed;inset:0;z-index:500;display:flex;align-items:center;justify-content:center;padding:18px;background:rgba(13,20,27,.57)}.modal{display:flex;flex-direction:column;width:min(680px,100%);max-height:min(760px,92vh);background:#fff;border-radius:8px;box-shadow:0 18px 55px rgba(0,0,0,.36);overflow:hidden}.modal.small{width:min(490px,100%)}.modal-head{display:flex;justify-content:space-between;align-items:center;padding:13px 16px;background:#edf1f4;border-bottom:1px solid #cdd4da}.modal-head h2{font-size:17px;margin:0}.modal-close{border:0;background:transparent;font-size:22px;color:#63717d;cursor:pointer}.modal-body{padding:15px 16px;overflow:auto}.modal-foot{display:flex;justify-content:flex-end;gap:8px;padding:10px 16px;border-top:1px solid #d4dae0}.modal button{border:1px solid #b9c2ca;border-radius:4px;background:#fff;padding:7px 12px;cursor:pointer}.modal button.primary{background:var(--blue);border-color:var(--blue-dark);color:#fff}.modal textarea{width:100%;min-height:130px;border:1px solid #b9c3cb;border-radius:5px;padding:8px;resize:vertical}.new-object-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:9px}.new-object-choice{display:grid!important;grid-template-columns:46px minmax(0,1fr);gap:9px;align-items:center;text-align:left!important;padding:10px!important}.new-object-choice strong{display:block}.new-object-choice small{display:block;color:#687582;font-size:11px;margin-top:3px;line-height:1.3}.share-note{color:#5c6974;line-height:1.48}.share-option{display:flex;align-items:flex-start;gap:9px;margin:13px 0;padding:10px;background:#f7f9fa;border:1px solid #d4dae0;border-radius:5px}.share-option input{margin-top:3px}.share-option label{font-weight:700}.share-option small{display:block;margin-top:3px;color:#66737e;font-weight:400;line-height:1.4}.share-link-row{display:flex;gap:7px;margin-top:7px}.share-link-row input{flex:1;min-width:0;border:1px solid #b9c3cb;border-radius:4px;padding:8px;background:#f8fafb}.share-link-row button{background:var(--blue);color:#fff;border-color:var(--blue-dark)}.share-status{min-height:20px;margin-top:8px;color:#5b6974;font-size:13px}.share-status.error{color:#a83228}.toast-stack{position:fixed;right:15px;bottom:41px;z-index:1000;display:flex;flex-direction:column;gap:8px;pointer-events:none}.toast{min-width:230px;max-width:390px;background:#25323c;color:#fff;border-radius:5px;padding:10px 12px;box-shadow:var(--shadow)}.toast.error{background:#9f332a}.toast.success{background:#267346}@media(max-width:1180px){.workspace{grid-template-columns:var(--source-width) min(var(--controls-width,156px),220px) minmax(300px,1fr) 0}.right-panel{visibility:hidden}.tool-label{display:none}}@media(max-width:820px){.workspace{grid-template-columns:126px minmax(280px,1fr)}.source-resize-handle{display:none}.source-panel{position:absolute;left:0;top:93px;bottom:28px;width:min(390px,88vw);transform:translateX(-100%);transition:.2s;box-shadow:3px 0 14px rgba(0,0,0,.2)}.source-panel.mobile-open{transform:translateX(0)}.controls-panel{grid-column:1}.menu-strip{display:none}.title-wrap{min-width:100px}}@media(max-width:560px){.workspace{grid-template-columns:minmax(280px,1fr)}.controls-panel{display:none}}@media print{.topbar,.toolbar,.source-panel,.controls-panel,.right-panel,.statusbar,.canvas-hint{display:none!important}.app,.workspace,.canvas-shell{display:block;width:100%;height:100%;background:#fff}#diagramSvg{width:100vw;height:100vh}}
 
 
-/* Execution console and current-control spotlight — Charter 0.0.5 */
+/* Execution console and current-control spotlight — Charter 0.0.6 */
 .run-output{
   background:#000!important;color:#fff!important;
   font-family:Consolas,"Lucida Console","Courier New",monospace!important;
@@ -4382,9 +4391,9 @@ if ($showLanding) {
 }
 @media(prefers-reduced-motion:reduce){.node.run-active .body{animation:none!important;filter:drop-shadow(0 0 25px #ffba39) drop-shadow(0 0 60px #ff468a)!important}}
 
-/* Flowgorithm controls — Charter 0.0.5 baseline */
+/* Flowgorithm controls — Charter 0.0.6 baseline */
 .default-caption::placeholder{color:#8b949b;opacity:1;font-style:italic}
-.node .body{vector-effect:non-scaling-stroke}
+.node .body{vector-effect:non-scaling-stroke}.node.drop-control-target .body{stroke:#e00000!important;stroke-width:5!important;filter:drop-shadow(0 0 4px rgba(224,0,0,.65))!important;vector-effect:non-scaling-stroke}.node.drop-control-target .selection{display:block!important;stroke:#e00000!important;stroke-width:3!important;stroke-dasharray:none!important;vector-effect:non-scaling-stroke}
 .flowgorithm-palette svg.control-icon,.new-object-choice svg.control-icon{display:block;background:transparent!important;border:0!important;clip-path:none!important;overflow:visible}
 .flowgorithm-palette svg.control-icon polygon,.new-object-choice svg.control-icon polygon{vector-effect:non-scaling-stroke;stroke-width:3!important;stroke-linejoin:round}
 .flowgorithm-palette svg.control-icon.fg-if polygon,.new-object-choice svg.control-icon.fg-if polygon{fill:#ffd0d0!important;stroke:#8f5f5f!important}
@@ -4437,6 +4446,20 @@ body.source-panel-hidden .workspace{grid-template-columns:var(--controls-width,1
 .app{grid-template-rows:46px var(--charter-settings-height,44px) minmax(0,1fr) 27px!important}
 .toolbar{position:relative;overflow:auto;resize:none;min-height:33px;max-height:180px;align-content:start;flex-wrap:wrap}
 .charter-toolbar-grip{position:absolute;bottom:0;left:0;right:0;height:7px;cursor:ns-resize;background:linear-gradient(to bottom,transparent,#b3bbc7);z-index:10}
+
+/* Flowchart canvas interaction: visible hand/pointer buttons and grey marching-ants selection. */
+.charter-interaction-switch{display:inline-flex;flex:none;align-items:stretch;gap:0;border:1px solid #9eabb7;border-radius:6px;overflow:hidden;background:#fff}
+.charter-interaction-switch .tool-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-width:76px;height:33px;padding:0 10px;border:0;border-radius:0;background:#fff;color:#354657;font-weight:600;white-space:nowrap}
+.charter-interaction-switch .tool-btn+.tool-btn{border-left:1px solid #9eabb7}
+.charter-interaction-switch .tool-btn:hover:not(.charter-interaction-active){background:#e8eff5}
+.charter-interaction-switch .tool-btn.charter-interaction-active,.charter-interaction-switch .tool-btn[aria-pressed="true"]{background:#175f91;color:#fff;font-weight:750;box-shadow:inset 0 0 0 2px #0d4e7b}
+.charter-interaction-switch .tool-btn:focus-visible{outline:2px solid #f29d23;outline-offset:-3px}
+.charter-mode-icon{width:19px;height:19px;flex:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;fill:none}
+.charter-marquee{fill:none!important;stroke:#777!important;stroke-width:1.6;stroke-dasharray:6 4;stroke-dashoffset:0;vector-effect:non-scaling-stroke;pointer-events:none;animation:charter-marching-ants .65s linear infinite}
+@keyframes charter-marching-ants{to{stroke-dashoffset:-20}}
+#diagramSvg.charter-select-mode .node{cursor:crosshair!important}
+#diagramSvg.charter-select-mode{cursor:crosshair!important}
+
 .charter-view-hidden{display:none!important}
 .charter-view-menu button{display:block;width:100%;text-align:left;padding:7px 10px;border:0;background:transparent;color:inherit;white-space:nowrap}
 .charter-view-menu button:hover{background:#e8edf3;color:#142333}
@@ -4463,6 +4486,11 @@ body.source-panel-hidden .workspace{grid-template-columns:var(--controls-width,1
 <button data-action="browser-projects">Browser projects…</button><hr>
 <button data-action="download-json">Download JSON…</button>
 <button data-action="print">Print <kbd>Ctrl+P</kbd></button>
+</div></div>
+<div class="menu"><button type="button">Edit</button><div class="dropdown">
+<button data-action="edit-cut">Cut <kbd>Ctrl+X</kbd></button>
+<button data-action="edit-copy">Copy <kbd>Ctrl+C</kbd></button>
+<button data-action="edit-paste">Paste <kbd>Ctrl+V</kbd></button>
 </div></div>
 <div class="menu"><button type="button">Export</button><div class="dropdown">
 <div class="nested-menu"><button type="button">Export to image…</button><div class="nested-menu-panel">
@@ -4512,12 +4540,15 @@ body.source-panel-hidden .workspace{grid-template-columns:var(--controls-width,1
 <div class="title-wrap"><span id="unsavedDot" class="unsaved-dot" title="Unsaved changes"></span><input id="diagramTitle" aria-label="Diagram title"></div>
 </header>
 <div class="toolbar" id="charterSettingsPanel">
-<label for="diagramType">Diagram</label><select id="diagramType"><option value="flowchart">Flowchart</option><option value="dfd">DFD</option><option value="erd">ERD</option><option value="mindmap">MindCanvas · Mind map</option></select>
+<label for="diagramType">Diagram</label><select id="diagramType"><option value="flowchart">Flowchart</option><option value="dfd">DFD</option><option value="erd">ERD</option><option value="mindmap">Mindmap</option></select>
 <label for="sourceType">Code</label><select id="sourceType"></select>
 <label for="direction">Layout</label><select id="direction"><option value="TB">Top → bottom</option><option value="LR">Left → right</option><option value="GRID">Grid</option><option value="FV">Fixed vertical (Flowgorithm)</option></select>
 <label for="lineType">Lines</label><select id="lineType"><option value="orthogonal">90°</option><option value="direct">Direct</option><option value="curved">Curved</option></select>
 <span class="sep"></span>
-<button class="tool-btn" data-action="new-object" title="Add a new diagram object">＋ <span class="tool-label">New Object</span></button>
+<div class="charter-interaction-switch" role="group" aria-label="Canvas interaction mode">
+<button type="button" class="tool-btn charter-interaction-active" id="charterMoveMode" aria-pressed="true" aria-label="Move: drag controls and pan canvas" title="Move controls and pan the canvas"><svg class="charter-mode-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 13V6a1.5 1.5 0 0 1 3 0v5-7a1.5 1.5 0 0 1 3 0v7-5a1.5 1.5 0 0 1 3 0v5-2a1.5 1.5 0 0 1 3 0v5c0 4-2.5 7-7 7h-2c-2 0-3-1-4-2l-3-4a1.8 1.8 0 0 1 2.8-2.2L8 15"/></svg><span>Move</span></button>
+<button type="button" class="tool-btn" id="charterSelectMode" aria-pressed="false" aria-label="Select: drag a rectangle to select controls" title="Click and drag to box-select controls"><svg class="charter-mode-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m5 3 14 9-7 1-3 7-4-17Z"/><path d="m12 13 5 7"/></svg><span>Select</span></button>
+</div>
 <button class="tool-btn" data-action="render" title="Render source (Ctrl+Enter)">⟳ <span class="tool-label">Render</span></button>
 <button class="tool-btn" data-action="run" id="runProgramBtn" title="Run the flowchart">▶ <span class="tool-label">Run</span></button>
 <button class="tool-btn" data-action="auto-layout" title="Auto-layout">⌘</button>
@@ -4573,6 +4604,7 @@ const sourceEditor=el('sourceEditor'),lineNumbers=el('lineNumbers'),inspector=el
 
 let project=null,currentModel={nodes:[],edges:[],warnings:[],title:''},selectedId=null,selectedEdgeId=null,selectedTextId=null,selectedItems=new Set();
 let camera={x:0,y:0,scale:1},currentPositions=new Map(),nodeSizes=new Map();
+let interactionMode="move",marqueeState=null,marqueeElement=null,canvasPaintFrame=0,canvasPaintInspector=false;
 let panState=null,dragState=null,renderTimer=null,autosaveTimer=null,sharedAutosaveTimer=null,dirty=false,sourceResizeState=null,controlsResizeState=null,inspectorResizeState=null,edgeClickTimer=null,lastNodePointer={id:null,time:0};
 let serverShareId=null,serverShareUrl=null,serverNewSessionUrl=null,localProjectKey=null;
 let changeRevision=0,serverSaveChain=Promise.resolve();
@@ -5638,11 +5670,75 @@ function renderFromSource(options={}){
 }
 
 function applyGrid(){canvasShell.classList.toggle('no-grid',!project.settings.showGrid);}
+// Repaint at most once per animation frame during pointer movement. Do not
+// rebuild the Inspector (and its active inputs) for each pointer event.
+function scheduleCanvasPaint(updateInspector=false){
+    canvasPaintInspector=canvasPaintInspector||updateInspector;
+    if(canvasPaintFrame)return;
+    canvasPaintFrame=requestAnimationFrame(()=>{
+        canvasPaintFrame=0;
+        const inspectorNeeded=canvasPaintInspector;
+        canvasPaintInspector=false;
+        renderDiagram(inspectorNeeded);
+    });
+}
+function flushCanvasPaint(){
+    if(canvasPaintFrame){cancelAnimationFrame(canvasPaintFrame);canvasPaintFrame=0;canvasPaintInspector=false;}
+    renderDiagram();
+}
+function setCanvasInteractionMode(mode){
+    interactionMode=mode==='select'?'select':'move';
+    marqueeState=null;
+    if(marqueeElement){marqueeElement.remove();marqueeElement=null;}
+    for(const [id,active] of [['charterMoveMode',interactionMode==='move'],['charterSelectMode',interactionMode==='select']]){
+        const button=el(id);
+        if(button){button.classList.toggle('charter-interaction-active',active);button.setAttribute('aria-pressed',String(active));}
+    }
+    svg.classList.toggle('charter-select-mode',interactionMode==='select');
+}
+el('charterMoveMode').addEventListener('click',()=>setCanvasInteractionMode('move'));
+el('charterSelectMode').addEventListener('click',()=>setCanvasInteractionMode('select'));
+function rectangleForMarquee(a,b){return{x:Math.min(a.x,b.x),y:Math.min(a.y,b.y),width:Math.abs(a.x-b.x),height:Math.abs(a.y-b.y)};}
+function updateMarquee(point){
+    if(!marqueeState)return;
+    const r=rectangleForMarquee(marqueeState.start,point);
+    if(!marqueeElement){marqueeElement=createSvg('rect',{class:'charter-marquee'});viewport.appendChild(marqueeElement);}
+    for(const [k,v] of Object.entries(r))marqueeElement.setAttribute(k,v);
+}
+function finishMarquee(){
+    if(!marqueeState)return;
+    const state=marqueeState,rect=rectangleForMarquee(state.start,state.end||state.start);
+    marqueeState=null;
+    if(marqueeElement){marqueeElement.remove();marqueeElement=null;}
+    if(!state.additive)selectedItems.clear();
+    // Select controls whose bounds intersect the rubber-band rectangle.
+    for(const node of currentModel.nodes){
+        const pos=currentPositions.get(node.id),size=nodeSizes.get(node.id);
+        if(!pos||!size)continue;
+        if(pos.x+size.width/2>=rect.x&&pos.x-size.width/2<=rect.x+rect.width&&pos.y+size.height/2>=rect.y&&pos.y-size.height/2<=rect.y+rect.height)selectedItems.add(selectionKey('node',node.id));
+    }
+    for(const box of floatingTextboxes()){
+        const b=normaliseFloatingTextbox(box),lines=String(b.text).split(/\r?\n/);
+        const width=Math.max(36,...lines.map(line=>line.length*b.fontSize*.62+14));
+        const height=Math.max(b.fontSize+10,lines.length*b.fontSize*1.25+8);
+        if(b.x+width/2>=rect.x&&b.x-width/2<=rect.x+rect.width&&b.y+height/2>=rect.y&&b.y-height/2<=rect.y+rect.height)selectedItems.add(selectionKey('textbox',b.id));
+    }
+    syncPrimarySelection();
+    flushCanvasPaint();
+}
+let canvasNodesById=new Map(),canvasOutgoingById=new Map();
 function renderDiagram(updateInspector=true){
+    // Rebuild cheap lookup maps once per paint, not for every connector.
+    canvasNodesById=new Map(currentModel.nodes.map(node=>[node.id,node]));
+    canvasOutgoingById=new Map();
+    for(const edge of currentModel.edges){
+        if(!canvasOutgoingById.has(edge.from))canvasOutgoingById.set(edge.from,[]);
+        canvasOutgoingById.get(edge.from).push(edge);
+    }
     resetFlowDropPathCache();
     document.body.classList.toggle('fixed-vertical-mode',isFixedVertical());
     edgesLayer.innerHTML='';labelsLayer.innerHTML='';nodesLayer.innerHTML='';viewport.setAttribute('transform',`translate(${camera.x} ${camera.y}) scale(${camera.scale})`);
-    currentModel.edges.forEach(renderEdge);viewport.appendChild(edgesLayer);viewport.appendChild(labelsLayer);viewport.appendChild(nodesLayer);currentModel.nodes.forEach(node=>{if(project.diagramType==='flowchart'&&project.sourceType==='flowgorithm'&&node.sourceKeyword){const label=flowgorithmKindVisual(node.flowKind,node.key,node.sourceValue,project.settings.showCaptions?node.sourceCaption:'').label;renderNode({...node,label});}else renderNode(node);});renderFloatingTextboxes();if(updateInspector)renderInspector();el('zoomReadout').textContent=Math.round(camera.scale*100)+'%';
+    charterRoutedSegments=[];currentModel.edges.filter(e=>!getEdgeLayout(e).loopAround).forEach(renderEdge);currentModel.edges.filter(e=>getEdgeLayout(e).loopAround).forEach(renderEdge);viewport.appendChild(edgesLayer);viewport.appendChild(labelsLayer);viewport.appendChild(nodesLayer);currentModel.nodes.forEach(node=>{if(project.diagramType==='flowchart'&&project.sourceType==='flowgorithm'&&node.sourceKeyword){const label=flowgorithmKindVisual(node.flowKind,node.key,node.sourceValue,project.settings.showCaptions?node.sourceCaption:'').label;renderNode({...node,label});}else renderNode(node);});renderFloatingTextboxes();if(updateInspector)renderInspector();el('zoomReadout').textContent=Math.round(camera.scale*100)+'%';
 }
 function nodeAnchorInfo(fromId,toId){
     const a=currentPositions.get(fromId),b=currentPositions.get(toId),size=nodeSizes.get(fromId);if(!a||!b||!size)return{point:{x:a?a.x:0,y:a?a.y:0},normal:{x:1,y:0},side:'right'};
@@ -5663,11 +5759,11 @@ function fixedNodeAnchor(node,side){
     return{point:{x:p.x+size.width/2,y:p.y},normal:{x:1,y:0},side:'right'};
 }
 function flowchartEdgeAnchorInfo(edge){
-    const fromNode=currentModel.nodes.find(n=>n.id===edge.from),toNode=currentModel.nodes.find(n=>n.id===edge.to),fromPos=currentPositions.get(edge.from),toPos=currentPositions.get(edge.to);
+    const fromNode=canvasNodesById.get(edge.from),toNode=canvasNodesById.get(edge.to),fromPos=currentPositions.get(edge.from),toPos=currentPositions.get(edge.to);
     let a=nodeAnchorInfo(edge.from,edge.to),b=nodeAnchorInfo(edge.to,edge.from);
     if(!fromNode||!toNode||!fromPos||!toPos)return{a,b};
     if(['if','while','for'].includes(fromNode.flowKind)){
-        const outs=currentModel.edges.filter(e=>e.from===fromNode.id),targets=outs.map(e=>({e,p:currentPositions.get(e.to)})).filter(v=>v.p).sort((u,v)=>u.p.x-v.p.x);
+        const outs=canvasOutgoingById.get(fromNode.id)||[],targets=outs.map(e=>({e,p:currentPositions.get(e.to)})).filter(v=>v.p).sort((u,v)=>u.p.x-v.p.x);
         if(targets.length===2){a=fixedNodeAnchor(fromNode,targets[0].e.id===edge.id?'left':'right');}
         else if(toPos.y>=fromPos.y-8)a=fixedNodeAnchor(fromNode,'bottom');
         else a=fixedNodeAnchor(fromNode,toPos.x<fromPos.x?'left':'right');
@@ -5686,8 +5782,8 @@ function distributedEdgeAnchors(edge){
         const special=flowMode?flowchartEdgeAnchorInfo(e):null;
         const source=special?special.a:nodeAnchorInfo(e.from,e.to);
         const target=special?special.b:nodeAnchorInfo(e.to,e.from);
-        return{a:fixedNodeAnchor(currentModel.nodes.find(n=>n.id===e.from),source.side)||source,
-               b:fixedNodeAnchor(currentModel.nodes.find(n=>n.id===e.to),target.side)||target};
+        return{a:fixedNodeAnchor(canvasNodesById.get(e.from),source.side)||source,
+               b:fixedNodeAnchor(canvasNodesById.get(e.to),target.side)||target};
     };
     const own=base(edge);
     // Each connector uses the centre of its selected control face by default.
@@ -5774,7 +5870,7 @@ function getEdgeLayout(edge){
         caption2:Object.prototype.hasOwnProperty.call(saved,'caption2')?String(saved.caption2):String(edge.label2||''),
         offset1:{x:Number(offset1.x)||0,y:Number.isFinite(Number(offset1.y))?Number(offset1.y):defaultY1},
         offset2:{x:Number(offset2.x)||0,y:Number.isFinite(Number(offset2.y))?Number(offset2.y):defaultY2},
-        style1:normaliseCaptionStyle(saved.style1),style2:normaliseCaptionStyle(saved.style2)
+        style1:normaliseCaptionStyle(saved.style1),style2:normaliseCaptionStyle(saved.style2),loopAround:saved.loopAround===true
     };
 }
 function writeFlowgorithmEdgeCaption(edge,caption){
@@ -5790,7 +5886,7 @@ function writeFlowgorithmEdgeCaption(edge,caption){
     if(lines[edge.sourceLineIndex]===raw)return false;
     sourceEditor.value=lines.join('\n');project.source=sourceEditor.value;updateLineNumbers();return true;
 }
-function saveEdgeLayout(edgeId,settings){project.layout.links[edgeId]={caption1:String(settings.caption1||''),caption2:String(settings.caption2||''),offset1:{x:Number(settings.offset1.x)||0,y:Number(settings.offset1.y)||0},offset2:{x:Number(settings.offset2.x)||0,y:Number(settings.offset2.y)||0},style1:normaliseCaptionStyle(settings.style1),style2:normaliseCaptionStyle(settings.style2)};}
+function saveEdgeLayout(edgeId,settings){project.layout.links[edgeId]={caption1:String(settings.caption1||''),caption2:String(settings.caption2||''),offset1:{x:Number(settings.offset1.x)||0,y:Number(settings.offset1.y)||0},offset2:{x:Number(settings.offset2.x)||0,y:Number(settings.offset2.y)||0},style1:normaliseCaptionStyle(settings.style1),style2:normaliseCaptionStyle(settings.style2),loopAround:settings.loopAround===true};}
 function renderEdgeCaption(edge,caption,x,y,index,style){
     if(!caption)return;const forced=project.diagramType==='flowchart'&&edge.branchCaptionRequired===true;if(!forced&&(!project.settings.showCaptions||!project.settings.showEdgeLabels))return;
     style=normaliseCaptionStyle(style);const label=String(caption),fontSize=style.fontSize,width=Math.min(320,Math.max(42,label.length*fontSize*.58+18)),height=Math.max(20,fontSize+9);
@@ -5819,9 +5915,107 @@ function renderFlowgorithmInsertArrow(edge,route,from,to){
     group.addEventListener('dblclick',event=>openFlowgorithmInsertFromPointer(edge,event));
     edgesLayer.appendChild(group);
 }
+/* Optional per-connector orthogonal detour. All positions are world coordinates.
+   A compressed visibility grid avoids repeatedly scanning a dense pixel grid.
+   Existing rendered connectors are forbidden corridors; controls have clearance.
+   The forced vertical source leg is at least the width of its source control. */
+let charterRoutedSegments=[];
+function charterSegmentsFromRoute(d){
+    const segments=[],pattern=/([ML])\s*(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)/g;
+    let match,previous=null;
+    while((match=pattern.exec(d))!==null){
+        const point={x:Number(match[2]),y:Number(match[3])};
+        if(match[1]==='L'&&previous&&(Math.abs(previous.x-point.x)>0.01||Math.abs(previous.y-point.y)>0.01))segments.push([previous,point]);
+        previous=point;
+    }
+    return segments;
+}
+function charterLoopRoute(edge,aInfo,bInfo){
+    const source=currentPositions.get(edge.from),target=currentPositions.get(edge.to),sourceSize=nodeSizes.get(edge.from);
+    if(!source||!target||!sourceSize)return null;
+    const a={x:source.x,y:source.y+sourceSize.height/2};
+    const bInfoTop=fixedNodeAnchor(currentModel.nodes.find(n=>n.id===edge.to),'top');
+    if(!bInfoTop)return null;
+    const b=bInfoTop.point;
+    const width=Math.max(60,sourceSize.width);
+    const depart={x:a.x,y:a.y+width};
+    const enter={x:b.x,y:b.y-22};
+    // Fixed departure and arrival legs must not hit other controls or lines.
+    const obstacles=[];
+    currentModel.nodes.forEach(node=>{
+        if(node.id===edge.from||node.id===edge.to)return;
+        const p=currentPositions.get(node.id),z=nodeSizes.get(node.id);
+        if(p&&z)obstacles.push({l:p.x-z.width/2-13,r:p.x+z.width/2+13,t:p.y-z.height/2-13,b:p.y+z.height/2+13});
+    });
+    const within=(v,l,r)=>v>l+0.01&&v<r-0.01;
+    const intersections=(p,q,rect)=>{
+        if(Math.abs(p.x-q.x)<.01)return within(p.x,rect.l,rect.r)&&Math.max(p.y,q.y)>rect.t&&Math.min(p.y,q.y)<rect.b;
+        if(Math.abs(p.y-q.y)<.01)return within(p.y,rect.t,rect.b)&&Math.max(p.x,q.x)>rect.l&&Math.min(p.x,q.x)<rect.r;
+        return true;
+    };
+    const lines=charterRoutedSegments;
+    const tooNear=(p,q,u,v)=>{
+        const pad=5;
+        // Block intersections and parallel segments within five diagram units.
+        const ph=Math.abs(p.y-q.y)<.01,uh=Math.abs(u.y-v.y)<.01;
+        if(ph&&uh)return Math.abs(p.y-u.y)<pad&&Math.max(Math.min(p.x,q.x),Math.min(u.x,v.x))<Math.min(Math.max(p.x,q.x),Math.max(u.x,v.x))+pad;
+        if(!ph&&!uh)return Math.abs(p.x-u.x)<pad&&Math.max(Math.min(p.y,q.y),Math.min(u.y,v.y))<Math.min(Math.max(p.y,q.y),Math.max(u.y,v.y))+pad;
+        const h=ph?[p,q]:[u,v],vertical=ph?[u,v]:[p,q];
+        return within(vertical[0].x,Math.min(h[0].x,h[1].x)-pad,Math.max(h[0].x,h[1].x)+pad)&&within(h[0].y,Math.min(vertical[0].y,vertical[1].y)-pad,Math.max(vertical[0].y,vertical[1].y)+pad);
+    };
+    const blocked=(p,q)=>obstacles.some(r=>intersections(p,q,r))||lines.some(([u,v])=>tooNear(p,q,u,v));
+    // The mandatory vertical leg is prioritised. If a previously existing
+    // connector crosses this leg, avoid it where possible through later turns.
+    const xs=new Set([depart.x,enter.x]),ys=new Set([depart.y,enter.y]);
+    for(const r of obstacles){xs.add(r.l-10);xs.add(r.r+10);ys.add(r.t-10);ys.add(r.b+10);}
+    for(const [u,v] of lines){
+        if(Math.abs(u.x-v.x)<.01){xs.add(u.x-10);xs.add(u.x+10);}else if(Math.abs(u.y-v.y)<.01){ys.add(u.y-10);ys.add(u.y+10);}
+    }
+    const minX=Math.min(depart.x,enter.x,...obstacles.map(r=>r.l)),maxX=Math.max(depart.x,enter.x,...obstacles.map(r=>r.r));
+    const minY=Math.min(depart.y,enter.y,...obstacles.map(r=>r.t)),maxY=Math.max(depart.y,enter.y,...obstacles.map(r=>r.b));
+    xs.add(minX-90);xs.add(maxX+90);ys.add(minY-90);ys.add(maxY+90);
+    const xx=[...xs].sort((c,d)=>c-d),yy=[...ys].sort((c,d)=>c-d);
+    if(xx.length*yy.length>25000)return null;
+    const sx=xx.indexOf(depart.x),sy=yy.indexOf(depart.y),tx=xx.indexOf(enter.x),ty=yy.indexOf(enter.y);
+    const key=(x,y,axis)=>x+','+y+','+axis;
+    const open=[{x:sx,y:sy,axis:0,cost:0,score:Math.abs(depart.x-enter.x)+Math.abs(depart.y-enter.y)}],best=new Map([[key(sx,sy,0),0]]),parents=new Map();
+    let last=null,iterations=0;
+    while(open.length&&iterations++<12000){
+        // Manhattan heuristic is admissible; bend penalty prefers clean routes.
+        open.sort((u,v)=>u.score-v.score);const here=open.shift(),hereKey=key(here.x,here.y,here.axis);
+        if(here.cost!==best.get(hereKey))continue;
+        if(here.x===tx&&here.y===ty){last=hereKey;break;}
+        for(const [dx,dy,axis] of [[1,0,1],[-1,0,1],[0,1,2],[0,-1,2]]){
+            const x=here.x+dx,y=here.y+dy;if(x<0||x>=xx.length||y<0||y>=yy.length)continue;
+            const p={x:xx[here.x],y:yy[here.y]},q={x:xx[x],y:yy[y]};
+            if(blocked(p,q))continue;
+            const cost=here.cost+Math.abs(q.x-p.x)+Math.abs(q.y-p.y)+(here.axis&&here.axis!==axis?24:0),id=key(x,y,axis);
+            if(cost>= (best.get(id)??Infinity))continue;
+            best.set(id,cost);parents.set(id,hereKey);
+            open.push({x,y,axis,cost,score:cost+Math.abs(q.x-enter.x)+Math.abs(q.y-enter.y)});
+        }
+    }
+    if(!last)return null;
+    const middle=[];
+    while(last){const [x,y]=last.split(',').map(Number);middle.push({x:xx[x],y:yy[y]});last=parents.get(last);}
+    middle.reverse();const points=[a,depart,...middle.slice(1),b];
+    const clean=[];
+    for(const pt of points){
+        if(clean.length&&Math.abs(clean[clean.length-1].x-pt.x)<.01&&Math.abs(clean[clean.length-1].y-pt.y)<.01)continue;
+        clean.push(pt);
+        while(clean.length>=3){const n=clean.length,u=clean[n-3],v=clean[n-2],w=clean[n-1];
+            if((Math.abs(u.x-v.x)<.01&&Math.abs(v.x-w.x)<.01)||(Math.abs(u.y-v.y)<.01&&Math.abs(v.y-w.y)<.01))clean.splice(n-2,1);else break;
+        }
+    }
+    // Do not simplify the source's mandatory vertical leg.
+    if(clean.length<2||Math.abs(clean[1].x-clean[0].x)>.01||clean[1].y-clean[0].y<width-.01)return null;
+    const label=clean[Math.floor(clean.length/2)];
+    return{d:clean.map((pt,i)=>(i?'L ':'M ')+pt.x+' '+pt.y).join(' '),label};
+}
 function renderEdge(edge){
     const from=currentPositions.get(edge.from),to=currentPositions.get(edge.to);if(!from||!to)return;
-    const anchors=distributedEdgeAnchors(edge),aInfo=anchors.a,bInfo=anchors.b,isErd=project.diagramType==='erd',route=edgeRoute(aInfo,bInfo,project.settings.lineType||'orthogonal',isErd),selected=isSelected('edge',edge.id);
+    const anchors=distributedEdgeAnchors(edge),aInfo=anchors.a,bInfo=anchors.b,isErd=project.diagramType==='erd',loopEnabled=getEdgeLayout(edge).loopAround,route=(loopEnabled?charterLoopRoute(edge,aInfo,bInfo):null)||edgeRoute(aInfo,bInfo,project.settings.lineType||'orthogonal',isErd),selected=isSelected('edge',edge.id);
+    charterRoutedSegments.push(...charterSegmentsFromRoute(route.d));
     const attrs={d:route.d,class:'edge'+(selected?' selected':'')};if(!isErd){attrs['marker-end']='url(#arrowHead)';if(edge.bidirectional)attrs['marker-start']='url(#arrowHead)';}
     const path=createSvg('path',attrs);if(edge.id===highlightedDropEdgeId)path.classList.add('drop-target');edgesLayer.appendChild(path);
     const hit=createSvg('path',{d:route.d,class:'edge-hit','data-edge-id':edge.id});hit.addEventListener('pointerdown',event=>event.stopPropagation());hit.addEventListener('mouseenter',()=>path.classList.add('hovered'));hit.addEventListener('mouseleave',()=>path.classList.remove('hovered'));hit.addEventListener('click',event=>{event.stopPropagation();clearTimeout(edgeClickTimer);const additive=event.shiftKey;edgeClickTimer=setTimeout(()=>{selectItem('edge',edge.id,additive);renderDiagram();edgeClickTimer=null;},220);});hit.addEventListener('dblclick',event=>{clearTimeout(edgeClickTimer);edgeClickTimer=null;openFlowgorithmInsertFromPointer(edge,event);});edgesLayer.appendChild(hit);
@@ -5859,11 +6053,16 @@ function addFloatingTextboxAt(clientX,clientY){const point=screenToWorld(clientX
 function addFloatingTextboxWorld(x,y){pushUndoSnapshot();if(project.diagramType==='dfd')return addDfdSourceTextboxWorld(x,y);const id='text-'+uuid(),box=normaliseFloatingTextbox({id,text:'Text',x,y});project.layout.textboxes[id]=box;selectItem('textbox',id,false);setDirty(true);renderDiagram();persistLayoutSoon();return id;}
 function addDfdSourceTextboxWorld(x,y){appendSourceBlock('## Text');syncDfdSourceTextboxes(sourceEditor.value);const records=dfdTextRecords(sourceEditor.value),record=records[records.length-1],id=record?record.id:'',box=id?project.layout.textboxes[id]:null;if(box){box.x=x;box.y=y;box.sourceBacked=true;box.sourceType='dfd';box.sourceOrdinal=record.ordinal;}if(id)selectItem('textbox',id,false);renderFromSource({fit:false,markDirty:false});setDirty(true);renderDiagram();persistLayoutSoon();return id;}
 function startFloatingTextDrag(event){
-    event.stopPropagation();const id=event.currentTarget.getAttribute('data-text-id'),box=project.layout.textboxes[id];if(!box)return;
+    event.stopPropagation();
+    if(interactionMode==='select'){
+        selectItem('textbox',event.currentTarget.getAttribute('data-text-id'),event.shiftKey);
+        renderDiagram();
+        return;
+    }const id=event.currentTarget.getAttribute('data-text-id'),box=project.layout.textboxes[id];if(!box)return;
     if(event.shiftKey)selectItem('textbox',id,true);else if(!isSelected('textbox',id))selectItem('textbox',id,false);
     const point=screenToWorld(event.clientX,event.clientY),members=[];
     selectedMovableItems().forEach(item=>{if(item.kind==='textbox'){const b=project.layout.textboxes[item.id];if(b)members.push({kind:'textbox',id:item.id,x:Number(b.x)||0,y:Number(b.y)||0});}else{const pos=currentPositions.get(item.id);if(pos)members.push({kind:'node',id:item.id,x:pos.x,y:pos.y});}});
-    dragState={kind:'group',id,startX:point.x,startY:point.y,members,moved:false,undoSnapshot:makeUndoSnapshot()};event.currentTarget.setPointerCapture(event.pointerId);renderDiagram();
+    dragState={kind:'group',id,startX:point.x,startY:point.y,members,moved:false,undoSnapshot:makeUndoSnapshot()};svg.setPointerCapture(event.pointerId);renderDiagram();
 }
 
 function addMultilineText(group,lines,x,y,lineHeight=18,attrs={}){const text=createSvg('text',Object.assign({x,y,'text-anchor':'middle'},attrs));lines.forEach((line,i)=>{const span=createSvg('tspan',{x,dy:i===0?0:lineHeight});span.textContent=line;text.appendChild(span);});group.appendChild(text);return text;}
@@ -5992,6 +6191,12 @@ function beginFlowchartInlineEdit(node,group,size){
 function screenToWorld(clientX,clientY){const rect=svg.getBoundingClientRect();return{x:(clientX-rect.left-camera.x)/camera.scale,y:(clientY-rect.top-camera.y)/camera.scale};}
 function startNodeDrag(event){
     event.stopPropagation();
+    if(interactionMode==='select'){
+        const id=event.currentTarget.getAttribute('data-id');
+        selectItem('node',id,event.shiftKey);
+        renderDiagram();
+        return;
+    }
     const id=event.currentTarget.getAttribute('data-id'),point=screenToWorld(event.clientX,event.clientY),p=currentPositions.get(id);if(!p)return;
     const stamp=(window.performance&&performance.now)?performance.now():Date.now(),isDouble=lastNodePointer.id===id&&(stamp-lastNodePointer.time)<=420;
     lastNodePointer={id,time:stamp};
@@ -6005,21 +6210,143 @@ function startNodeDrag(event){
     }
     if(isFixedVertical()){dragState=null;renderDiagram();return;}
     const members=[];selectedMovableItems().forEach(item=>{if(item.kind==='node'){const pos=currentPositions.get(item.id);if(pos)members.push({kind:'node',id:item.id,x:pos.x,y:pos.y});}else{const b=project.layout.textboxes[item.id];if(b)members.push({kind:'textbox',id:item.id,x:Number(b.x)||0,y:Number(b.y)||0});}});
-    dragState={kind:'group',id,startX:point.x,startY:point.y,members,moved:false,undoSnapshot:makeUndoSnapshot()};event.currentTarget.setPointerCapture(event.pointerId);renderDiagram();
+    dragState={kind:'group',id,startX:point.x,startY:point.y,members,moved:false,undoSnapshot:makeUndoSnapshot()};svg.setPointerCapture(event.pointerId);renderDiagram();
 }
-svg.addEventListener('pointerdown',event=>{if(event.target.closest('.node')||event.target.closest('.floating-text')||event.target.closest('.edge-hit')||event.target.closest('.edge-label'))return;panState={x:event.clientX,y:event.clientY,cameraX:camera.x,cameraY:camera.y};svg.classList.add('panning');svg.setPointerCapture(event.pointerId);clearSelection();renderDiagram();});
-svg.addEventListener('pointermove',event=>{if(dragState){const point=screenToWorld(event.clientX,event.clientY),dx=point.x-dragState.startX,dy=point.y-dragState.startY;if(!dragState.moved)pushUndoSnapshot(dragState.undoSnapshot);(dragState.members||[]).forEach(member=>{const p={x:member.x+dx,y:member.y+dy};if(member.kind==='textbox'){const box=project.layout.textboxes[member.id];if(box){box.x=p.x;box.y=p.y;}}else{currentPositions.set(member.id,p);project.layout.positions[member.id]={x:p.x,y:p.y};}});dragState.moved=true;setDirty(true);renderDiagram();return;}if(panState){camera.x=panState.cameraX+event.clientX-panState.x;camera.y=panState.cameraY+event.clientY-panState.y;renderDiagram();}});
-svg.addEventListener('pointerup',event=>{if(dragState){const moved=dragState.moved;dragState=null;if(moved){captureCurrentLayout(false);syncFlowgorithmVisualPositionsToSource();persistLayoutSoon();}return;}if(panState){panState=null;svg.classList.remove('panning');}});
-svg.addEventListener('pointercancel',()=>{dragState=null;panState=null;svg.classList.remove('panning');});
-svg.addEventListener('dblclick',event=>{if(event.target.closest('.node')||event.target.closest('.floating-text')||event.target.closest('.edge-hit')||event.target.closest('.edge-label'))return;event.preventDefault();event.stopPropagation();addFloatingTextboxAt(event.clientX,event.clientY);});
+svg.addEventListener('pointerdown',event=>{
+    if(event.button!==0)return;
+    if(event.target.closest('.node')||event.target.closest('.floating-text')||event.target.closest('.edge-hit')||event.target.closest('.edge-label'))return;
+    if(interactionMode==='select'){
+        const point=screenToWorld(event.clientX,event.clientY);
+        marqueeState={start:point,end:point,additive:event.shiftKey,id:event.pointerId};
+        if(!event.shiftKey){clearSelection();renderDiagram();}
+        updateMarquee(point);
+        svg.setPointerCapture(event.pointerId);
+        event.preventDefault();
+        return;
+    }
+    panState={x:event.clientX,y:event.clientY,cameraX:camera.x,cameraY:camera.y};
+    svg.classList.add('panning');svg.setPointerCapture(event.pointerId);
+    clearSelection();renderDiagram();
+});
+svg.addEventListener('pointermove',event=>{
+    if(marqueeState){
+        if(event.pointerId!==marqueeState.id)return;
+        marqueeState.end=screenToWorld(event.clientX,event.clientY);
+        updateMarquee(marqueeState.end);
+        return;
+    }
+    if(dragState){
+        const point=screenToWorld(event.clientX,event.clientY),dx=point.x-dragState.startX,dy=point.y-dragState.startY;
+        if(!dragState.moved)pushUndoSnapshot(dragState.undoSnapshot);
+        (dragState.members||[]).forEach(member=>{
+            const p={x:member.x+dx,y:member.y+dy};
+            if(member.kind==='textbox'){
+                const box=project.layout.textboxes[member.id];if(box){box.x=p.x;box.y=p.y;}
+            }else{
+                currentPositions.set(member.id,p);
+                project.layout.positions[member.id]={x:p.x,y:p.y};
+            }
+        });
+        dragState.moved=true;
+        scheduleCanvasPaint(false);
+        return;
+    }
+    if(panState){
+        camera.x=panState.cameraX+event.clientX-panState.x;
+        camera.y=panState.cameraY+event.clientY-panState.y;
+        // Panning only changes the viewport transform: no connector routing or DOM rebuild.
+        viewport.setAttribute('transform',`translate(${camera.x} ${camera.y}) scale(${camera.scale})`);
+    }
+});
+svg.addEventListener('pointerup',event=>{
+    if(marqueeState){finishMarquee();return;}
+    if(dragState){
+        const moved=dragState.moved;dragState=null;
+        if(moved){
+            setDirty(true);
+            captureCurrentLayout(false);
+            syncFlowgorithmVisualPositionsToSource();
+            persistLayoutSoon();
+        }
+        flushCanvasPaint();
+        return;
+    }
+    if(panState){panState=null;svg.classList.remove('panning');}
+});
+svg.addEventListener('pointercancel',()=>{
+    if(marqueeState){marqueeState=null;if(marqueeElement){marqueeElement.remove();marqueeElement=null;}}
+    dragState=null;panState=null;svg.classList.remove('panning');
+    flushCanvasPaint();
+});
+svg.addEventListener('dblclick',event=>{if(interactionMode==='select')return;if(event.target.closest('.node')||event.target.closest('.floating-text')||event.target.closest('.edge-hit')||event.target.closest('.edge-label'))return;event.preventDefault();event.stopPropagation();addFloatingTextboxAt(event.clientX,event.clientY);});
 var highlightedDropEdgeId=null;
-function clearFlowDropHighlight(){highlightedDropEdgeId=null;edgesLayer.querySelectorAll('.edge.drop-target').forEach(path=>path.classList.remove('drop-target'));}
-function highlightFlowDropEdge(edge){const next=edge?edge.id:null;if(next===highlightedDropEdgeId)return;clearFlowDropHighlight();if(!next)return;highlightedDropEdgeId=next;const hits=[...edgesLayer.querySelectorAll('.edge-hit')];const hit=hits.find(path=>path.getAttribute('data-edge-id')===next);if(hit){const path=hit.previousElementSibling;if(path&&path.classList.contains('edge'))path.classList.add('drop-target');}}
-canvasShell.addEventListener('dragover',event=>{if(event.dataTransfer&&Array.from(event.dataTransfer.types||[]).includes('application/x-charter-control')){event.preventDefault();event.dataTransfer.dropEffect='copy';const p=screenToWorld(event.clientX,event.clientY);const mode=currentDropMode(event);highlightFlowDropEdge(mode==='none'?null:mode==='append'?bottomFixedVerticalEdge():flowchartDropEdge(p.x,p.y,mode==='nearest'));}else clearFlowDropHighlight();});
+var highlightedDropControlId=null;
+function clearFlowDropHighlight(){
+    highlightedDropEdgeId=null;highlightedDropControlId=null;
+    edgesLayer.querySelectorAll('.edge.drop-target').forEach(path=>path.classList.remove('drop-target'));
+    nodesLayer.querySelectorAll('.node.drop-control-target').forEach(group=>group.classList.remove('drop-control-target'));
+}
+function highlightFlowDropEdge(edge){
+    const next=edge?edge.id:null;if(next===highlightedDropEdgeId&&!highlightedDropControlId)return;
+    clearFlowDropHighlight();if(!next)return;
+    highlightedDropEdgeId=next;
+    const hit=[...edgesLayer.querySelectorAll('.edge-hit')].find(path=>path.getAttribute('data-edge-id')===next);
+    if(hit){const path=hit.previousElementSibling;if(path&&path.classList.contains('edge'))path.classList.add('drop-target');}
+}
+function flowchartDropControl(x,y){
+    if(project.diagramType!=='flowchart'||project.sourceType!=='flowgorithm')return null;
+    // Exact object hit: don't allow a nearby connector to steal a drop on a control.
+    // No additional padding: a control must be underneath the pointer.
+    for(let i=currentModel.nodes.length-1;i>=0;i--){
+        const node=currentModel.nodes[i],pos=currentPositions.get(node.id),size=nodeSizes.get(node.id);
+        if(!pos||!size)continue;
+        if(Math.abs(x-pos.x)<=size.width/2&&Math.abs(y-pos.y)<=size.height/2)return node;
+    }
+    return null;
+}
+function highlightFlowDropControl(node){
+    const next=node?node.id:null;if(next===highlightedDropControlId&&!highlightedDropEdgeId)return;
+    clearFlowDropHighlight();if(!next)return;
+    highlightedDropControlId=next;
+    const group=[...nodesLayer.querySelectorAll('.node[data-id]')].find(g=>g.getAttribute('data-id')===next);
+    if(group)group.classList.add('drop-control-target');
+}
+function flowchartDropDestination(x,y,mode){
+    if(mode==='none')return{kind:'none'};
+    if(mode==='append')return{kind:'append'};
+    const control=flowchartDropControl(x,y);
+    if(control)return{kind:'control',control};
+    const edge=flowchartDropEdge(x,y,mode==='nearest');
+    return edge?{kind:'edge',edge}:{kind:'none'};
+}
+canvasShell.addEventListener('dragover',event=>{
+    if(event.dataTransfer&&Array.from(event.dataTransfer.types||[]).includes('application/x-charter-control')){
+        event.preventDefault();event.dataTransfer.dropEffect='copy';
+        const p=screenToWorld(event.clientX,event.clientY),mode=currentDropMode(event);
+        const destination=flowchartDropDestination(p.x,p.y,mode);
+        if(destination.kind==='control')highlightFlowDropControl(destination.control);
+        else highlightFlowDropEdge(destination.kind==='edge'?destination.edge:destination.kind==='append'?bottomFixedVerticalEdge():null);
+    }else clearFlowDropHighlight();
+});
 canvasShell.addEventListener('dragleave',event=>{if(!canvasShell.contains(event.relatedTarget))clearFlowDropHighlight();});
 window.addEventListener('dragend',clearFlowDropHighlight);
-
-canvasShell.addEventListener('drop',event=>{const type=event.dataTransfer?event.dataTransfer.getData('application/x-charter-control'):'';if(!type)return;event.preventDefault();clearFlowDropHighlight();const p=screenToWorld(event.clientX,event.clientY);const mode=currentDropMode(event);if(project.diagramType==='flowchart'&&project.sourceType==='flowgorithm'){pushUndoSnapshot();if(mode==='none')addUnlinkedFlowgorithmControl(type,p.x,p.y);else if(mode==='append')appendFlowgorithmAtBottom(type,p.x,p.y);else{const edge=flowchartDropEdge(p.x,p.y,mode==='nearest');/* Direct drop uses only the connector under the pointer, regardless of selection. */if(edge)insertFlowgorithmObjectOnEdge(edge,type,p.x,p.y);else addUnlinkedFlowgorithmControl(type,p.x,p.y);}}else addControlAtWorld(type,p.x,p.y,mode==='none');});
+canvasShell.addEventListener('drop',event=>{
+    const type=event.dataTransfer?event.dataTransfer.getData('application/x-charter-control'):'';
+    if(!type)return;
+    event.preventDefault();
+    const p=screenToWorld(event.clientX,event.clientY),mode=currentDropMode(event);
+    // Resolve BEFORE removing the red highlight; use the live pointer, not selected object.
+    const destination=flowchartDropDestination(p.x,p.y,mode);
+    clearFlowDropHighlight();
+    if(project.diagramType==='flowchart'&&project.sourceType==='flowgorithm'){
+        pushUndoSnapshot();
+        if(mode==='none')addUnlinkedFlowgorithmControl(type,p.x,p.y);
+        else if(mode==='append')appendFlowgorithmAtBottom(type,p.x,p.y);
+        else if(destination.kind==='control')insertFlowgorithmBeforeControl(destination.control,type);
+        else if(destination.kind==='edge')insertFlowgorithmObjectOnEdge(destination.edge,type,p.x,p.y);
+        else addUnlinkedFlowgorithmControl(type,p.x,p.y);
+    }else addControlAtWorld(type,p.x,p.y,mode==='none');
+});
 svg.addEventListener('wheel',event=>{event.preventDefault();const rect=svg.getBoundingClientRect(),mx=event.clientX-rect.left,my=event.clientY-rect.top,old=camera.scale,next=Math.min(3,Math.max(.2,old*(event.deltaY<0?1.12:.89)));camera.x=mx-(mx-camera.x)*(next/old);camera.y=my-(my-camera.y)*(next/old);camera.scale=next;renderDiagram();},{passive:false});
 
 function stripFixedVerticalLayoutSource(){
@@ -6132,6 +6459,130 @@ function deleteSelectedDiagramItem(){
     return changed;
 }
 
+// Charter canvas clipboard (not the text-editor clipboard). Keeps source-backed
+// controls and their internal arrows together, and preserves floating textboxes.
+let diagramClipboard=null;
+function canvasClipboardSelection(){
+    const nodes=[],texts=[],edges=[];
+    for(const selection of selectedItems){
+        const colon=selection.indexOf(':'),kind=selection.slice(0,colon),id=selection.slice(colon+1);
+        if(kind==='node'){const n=currentModel.nodes.find(n=>n.id===id);if(n)nodes.push(n);}
+        else if(kind==='textbox'){const b=project.layout.textboxes&&project.layout.textboxes[id];if(b)texts.push(clone(b));}
+        else if(kind==='edge'){const e=currentModel.edges.find(e=>e.id===id);if(e)edges.push(e);}
+    }
+    if(project.diagramType==='flowchart'&&project.sourceType==='flowgorithm'){
+        const keys=new Set(nodes.map(n=>String(n.key)));
+        const original=sourceEditor.value.replace(/\r/g,'').split('\n');
+        const declarations=nodes.map(n=>{
+            const record=original.find(line=>{const parsed=parseFlowgorithmDeclaration(stripLineComment(line));return parsed&&parsed.key===n.key;});
+            return {key:String(n.key),type:String(n.flowKind),line:record||flowgorithmDeclarationForType(n.flowKind,n.key),position:clone(currentPositions.get(n.id)||{x:0,y:0})};
+        });
+        // Copy all connectors internal to the copied subgraph, whether or not
+        // the user also clicked their arrowheads explicitly.
+        const inside=currentModel.edges.filter(e=>keys.has(String(e.fromKey))&&keys.has(String(e.toKey)));
+        const included=new Map([...inside,...edges].map(e=>[String(e.fromKey)+'\0'+String(e.toKey)+'\0'+String(e.label||''),e]));
+        const connections=[...included.values()].map(e=>({from:String(e.fromKey),to:String(e.toKey),label:String(e.label||'')}));
+        return {kind:'flowgorithm',declarations,connections,texts};
+    }
+    return {kind:'layout',nodes:nodes.map(n=>({key:String(n.key||''),position:clone(currentPositions.get(n.id)||{x:0,y:0})})),edges:edges.map(e=>({from:e.from,to:e.to,label:e.label||''})),texts};
+}
+function copyCanvasSelection(cut=false){
+    if(!selectedItems.size){toast('Select at least one control, connection or textbox first.','error');return false;}
+    const record=canvasClipboardSelection();
+    if(record.kind==='layout'&&(record.nodes.length||record.edges.length)){toast('Copying source-controlled objects in this diagram mode is not yet supported; nothing was changed.','error');return false;}
+    if(!record.declarations?.length&&!record.nodes?.length&&!record.connections?.length&&!record.edges?.length&&!record.texts?.length){toast('Nothing selected to copy.','error');return false;}
+    diagramClipboard=clone(record);
+    // The in-app clipboard is authoritative: async OS clipboard permissions
+    // must never prevent copying or cutting diagram controls.
+    const representation=record.kind==='flowgorithm'?[...record.declarations.map(item=>item.line),...record.connections.map(e=>e.from+' -> '+e.to+(e.label?' : '+e.label:''))].join('\n'):JSON.stringify(record);
+    if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(representation).catch(()=>{});
+    if(cut)deleteSelectedDiagramItem();
+    toast(cut?'Selection cut.':'Selection copied.','success');renderInspector();return true;
+}
+function uniqueClipboardControlKey(oldKey,used){
+    const stem=String(oldKey||'Control').replace(/[^A-Za-z0-9_]/g,'_').replace(/^[^A-Za-z_]/,'Control_')||'Control';
+    let candidate=stem+'Copy',index=2;
+    while(used.has(candidate.toLowerCase()))candidate=stem+'Copy'+index++;
+    used.add(candidate.toLowerCase());return candidate;
+}
+function pasteCanvasClipboard(){
+    if(!diagramClipboard){toast('Copy one or more diagram objects first.','error');return false;}
+    if(diagramClipboard.kind==='flowgorithm'&&project.diagramType==='flowchart'&&project.sourceType==='flowgorithm'){
+        const clip=diagramClipboard;
+        if(!clip.declarations.length){
+            if(!clip.connections.length){return pasteClipboardTextboxes(clip.texts);}
+            // Connections alone can be duplicated without changing their endpoints.
+            pushUndoSnapshot();const lines=sourceEditor.value.replace(/\r/g,'').split('\n');
+            for(const e of clip.connections){if(currentModel.nodes.some(n=>n.key===e.from)&&currentModel.nodes.some(n=>n.key===e.to))lines.splice(flowgorithmLayoutStartIndex(lines),0,`${e.from} -> ${e.to}${e.label?' : '+e.label:''}`);}
+            setFlowgorithmSourceLines(lines);renderFromSource({fit:false});setDirty(true);persistLayoutSoon();return true;
+        }
+        const targetEdge=selectedEdgeId&&currentModel.edges.find(e=>e.id===selectedEdgeId);
+        const targetNode=selectedId&&currentModel.nodes.find(n=>n.id===selectedId);
+        const originalNodes=currentModel.nodes.slice(),originalPositions=new Map(originalNodes.map(n=>[n.key,clone(currentPositions.get(n.id)||{x:0,y:0})]));
+        const used=new Set(originalNodes.map(n=>String(n.key).toLowerCase()));
+        const keyMap=new Map(clip.declarations.map(d=>[d.key,uniqueClipboardControlKey(d.key,used)]));
+        const sourceNodes=new Set(keyMap.keys());
+        const intra=clip.connections.filter(e=>sourceNodes.has(e.from)&&sourceNodes.has(e.to));
+        const incoming=new Set(intra.map(e=>e.to)),outgoing=new Set(intra.map(e=>e.from));
+        const first=(clip.declarations.find(d=>!incoming.has(d.key))||clip.declarations[0]).key;
+        const last=(clip.declarations.slice().reverse().find(d=>!outgoing.has(d.key))||clip.declarations[clip.declarations.length-1]).key;
+        const lines=sourceEditor.value.replace(/\r/g,'').split('\n');
+        pushUndoSnapshot();
+        if(targetEdge){
+            // Reconnect using the actual selected arrow, never the prior control selection.
+            const index=Number(targetEdge.sourceLineIndex);
+            if(Number.isInteger(index)&&index>=0&&index<lines.length){
+                const label=targetEdge.label?' : '+targetEdge.label:'';
+                lines[index]=`${targetEdge.fromKey} -> ${keyMap.get(first)}${label}`;
+                lines.splice(flowgorithmLayoutStartIndex(lines),0,`${keyMap.get(last)} -> ${targetEdge.toKey}`);
+            }
+        }else if(targetNode){
+            const incomingEdges=currentModel.edges.filter(e=>e.to===targetNode.id&&e.from!==targetNode.id);
+            for(const edge of incomingEdges){
+                const i=Number(edge.sourceLineIndex);
+                if(!Number.isInteger(i)||i<0||i>=lines.length)continue;
+                const match=lines[i].match(/^(\s*[^\n]*?->\s*)([^\s:]+)([\s\S]*)$/);
+                if(match&&match[2]===targetNode.key)lines[i]=match[1]+keyMap.get(first)+match[3];
+            }
+            lines.splice(flowgorithmLayoutStartIndex(lines),0,`${keyMap.get(last)} -> ${targetNode.key}`);
+        }
+        for(const e of intra)lines.splice(flowgorithmLayoutStartIndex(lines),0,`${keyMap.get(e.from)} -> ${keyMap.get(e.to)}${e.label?' : '+e.label:''}`);
+        for(const d of clip.declarations){
+            const renamed=d.line.replace(/^(\s*(?:terminal|stop|input|output|declare|assign|if|call|function|while|for|do)\s+)([A-Za-z_][\w.-]*)/i,(_m,prefix)=>prefix+keyMap.get(d.key));
+            insertFlowgorithmDeclarationIntoLines(lines,renamed);
+        }
+        setFlowgorithmSourceLines(lines);renderFromSource({fit:false,markDirty:false,deferPaint:true});
+        const anchor=targetNode?originalPositions.get(targetNode.key):targetEdge?originalPositions.get(targetEdge.toKey):null;
+        const earliest=Math.min(...clip.declarations.map(d=>Number(d.position.y)||0));
+        const originX=clip.declarations[0].position.x;
+        const shift=140*Math.max(1,clip.declarations.length);
+        if(anchor&&project.settings.pushOnInsertion!==false){
+            for(const n of currentModel.nodes){if([...keyMap.values()].includes(n.key))continue;const old=originalPositions.get(n.key);if(old&&old.y>=anchor.y-1){const p={x:old.x,y:old.y+shift};currentPositions.set(n.id,p);project.layout.positions[n.id]=p;project.layout.positionsByKey[nodeLayoutKey(n)]={id:n.id,key:n.key,type:n.type,x:p.x,y:p.y};}}
+        }
+        for(const d of clip.declarations){
+            const key=keyMap.get(d.key),node=currentModel.nodes.find(n=>n.key===key);if(!node)continue;
+            const position={x:anchor?anchor.x+(d.position.x-originX):d.position.x+70,y:anchor?anchor.y+(d.position.y-earliest):d.position.y+70};
+            currentPositions.set(node.id,position);project.layout.positions[node.id]=position;project.layout.positionsByKey[nodeLayoutKey(node)]={id:node.id,key:node.key,type:node.type,x:position.x,y:position.y};
+        }
+        clearSelection();for(const key of keyMap.values()){const node=currentModel.nodes.find(n=>n.key===key);if(node)selectedItems.add(selectionKey('node',node.id));}syncPrimarySelection();
+        pasteClipboardTextboxes(clip.texts,true);syncFlowgorithmVisualPositionsToSource();setDirty(true);renderDiagram();persistLayoutSoon();toast('Pasted '+clip.declarations.length+' control(s).','success');return true;
+    }
+    if(diagramClipboard.kind==='layout'&&diagramClipboard.texts.length)return pasteClipboardTextboxes(diagramClipboard.texts);
+    toast('This clipboard selection can only be pasted into a compatible Flowchart diagram.','error');return false;
+}
+function pasteClipboardTextboxes(boxes,withinUndo=false){
+    if(!boxes||!boxes.length)return false;
+    if(!withinUndo)pushUndoSnapshot();
+    project.layout.textboxes=project.layout.textboxes||{};
+    for(const entry of boxes){const copy=clone(entry);copy.id='text-'+uuid();copy.x=(Number(copy.x)||0)+45;copy.y=(Number(copy.y)||0)+45;copy.sourceBacked=false;delete copy.sourceOrdinal;project.layout.textboxes[copy.id]=copy;}
+    setDirty(true);renderDiagram();persistLayoutSoon();return true;
+}
+function canvasPasteActionHtml(){return diagramClipboard&&selectedItems.size===1&&(selectedId||selectedEdgeId)?'<div class="info-card charter-paste-card"><h3>Clipboard</h3><div class="info-body"><button type="button" class="mini-btn" data-inspector-action="paste-at-selection">Paste and insert here</button></div></div>':'';}
+function attachCanvasPasteInspector(){
+    if(!diagramClipboard||selectedItems.size!==1||!(selectedId||selectedEdgeId)||!inspector||inspector.querySelector('.charter-paste-card'))return;
+    const box=document.createElement('div');box.innerHTML=canvasPasteActionHtml();const card=box.firstElementChild;if(!card)return;
+    inspector.appendChild(card);const button=card.querySelector('[data-inspector-action="paste-at-selection"]');if(button)button.addEventListener('click',pasteCanvasClipboard);
+}
 function selectedNodeSequence(){
     const nodes=[];
     selectedItems.forEach(key=>{
@@ -6374,6 +6825,7 @@ function toggleFlowBranch(nodeId){
     selectItem('node',nodeId,false);setDirty(true);renderDiagram();persistLayoutSoon();
 }
 function renderInspector(){
+    if(diagramClipboard)queueMicrotask(attachCanvasPasteInspector);
     if(runState.active||runState.view){renderRunInspector();return;}
     if(selectedItems.size>1){
         const counts={node:0,edge:0,textbox:0};selectedItems.forEach(key=>{const kind=key.slice(0,key.indexOf(':'));if(Object.prototype.hasOwnProperty.call(counts,kind))counts[kind]++;});const connectionState=selectedConnectionsState(),connectionAction=connectionState.connected?'disconnect-selected':'connect-selected',connectionLabel=connectionState.connected?'Disconnect selected':'Connect selected';
@@ -6392,10 +6844,19 @@ function renderInspector(){
         if(edge){
             const from=currentModel.nodes.find(n=>n.id===edge.from),to=currentModel.nodes.find(n=>n.id===edge.to),layout=getEdgeLayout(edge);
             const captionBlock=(index,caption,offset,style)=>`<div class="info-card"><h3>Caption ${index}</h3><div class="info-body"><div class="field"><label>Caption</label><input id="edgeCaption${index}" value="${escapeAttr(caption)}" ${index===2?'placeholder="Optional second caption"':''}></div><div class="field"><label>X offset</label><input id="edgeCaption${index}X" type="number" value="${Math.round(offset.x)}"></div><div class="field"><label>Y offset</label><input id="edgeCaption${index}Y" type="number" value="${Math.round(offset.y)}"></div><div class="field"><label>Font size</label><input id="edgeCaption${index}Size" type="number" min="8" max="48" value="${style.fontSize}"></div><div class="field"><label>Colour</label><input id="edgeCaption${index}Color" type="color" value="${escapeAttr(style.color)}"></div>${recentColoursBlockHtml()}<div class="format-checks"><label><input id="edgeCaption${index}Bold" type="checkbox" ${style.bold?'checked':''}> Bold</label><label><input id="edgeCaption${index}Italic" type="checkbox" ${style.italic?'checked':''}> Italic</label><label><input id="edgeCaption${index}Underline" type="checkbox" ${style.underline?'checked':''}> Underline</label></div>${index===2?'<div class="mini-actions" style="margin-top:9px"><button class="mini-btn" data-inspector-action="reset-link">Reset captions</button></div>':''}</div></div>`;
-            inspector.innerHTML=`<div class="info-card"><h3>Selected connection</h3><div class="info-body"><div class="field"><label>From</label><input value="${escapeAttr(from?from.label:edge.from)}" readonly></div><div class="field"><label>To</label><input value="${escapeAttr(to?to.label:edge.to)}" readonly></div></div></div>${(project.settings.showCaptions||edge.branchCaptionRequired)?captionBlock(1,layout.caption1,layout.offset1,layout.style1)+(project.settings.showCaptions?captionBlock(2,layout.caption2,layout.offset2,layout.style2):''):''}<div class="info-card"><h3>Connection settings</h3><div class="info-body syntax-help">Caption text, offsets and formatting are stored with the diagram layout and included in browser autosave and shared diagrams.<div class="mini-actions" style="margin-top:9px"><button class="mini-btn" data-inspector-action="delete-selected">Delete connection</button></div></div></div>`;
+            inspector.innerHTML=`<div class="info-card"><h3>Selected connection</h3><div class="info-body"><div class="field"><label>From</label><input value="${escapeAttr(from?from.label:edge.from)}" readonly></div><div class="field"><label>To</label><input value="${escapeAttr(to?to.label:edge.to)}" readonly></div></div></div>${(project.settings.showCaptions||edge.branchCaptionRequired)?captionBlock(1,layout.caption1,layout.offset1,layout.style1)+(project.settings.showCaptions?captionBlock(2,layout.caption2,layout.offset2,layout.style2):''):''}<div class="info-card"><h3>Connection settings</h3><div class="info-body"><label class="format-checks" style="display:flex;align-items:center;gap:8px;cursor:pointer"><input id="edgeLoopAround" type="checkbox" ${layout.loopAround?'checked':''}> <strong>Loop around</strong></label><p class="syntax-help" style="margin:8px 0 0">When enabled, the connector leaves vertically for at least one source-control width and routes around other controls and connections. This setting is saved with the diagram.</p><div class="mini-actions" style="margin-top:9px"><button class="mini-btn" data-inspector-action="delete-selected">Delete connection</button></div></div></div>`;
+            const loopButton=el('edgeLoopAround');
+            if(loopButton)loopButton.addEventListener('change',()=>{
+                const activeEdgeId=selectedEdgeId;
+                if(!activeEdgeId||activeEdgeId!==edge.id)return;
+                pushUndoSnapshot();
+                project.layout.links=project.layout.links||{};
+                project.layout.links[edge.id]={...(project.layout.links[edge.id]||{}),loopAround:loopButton.checked};
+                setDirty(true);renderDiagram(false);persistLayoutSoon();
+            });
             let edgeUndoSnapshot=null,edgeUndoUsed=false;
             const styleFor=i=>({fontSize:Number(el(`edgeCaption${i}Size`).value)||11,color:el(`edgeCaption${i}Color`).value,bold:el(`edgeCaption${i}Bold`).checked,italic:el(`edgeCaption${i}Italic`).checked,underline:el(`edgeCaption${i}Underline`).checked});
-            const apply=()=>{if(!project.settings.showCaptions&&!edge.branchCaptionRequired)return;if(!edgeUndoUsed){pushUndoSnapshot(edgeUndoSnapshot||makeUndoSnapshot());edgeUndoUsed=true;}const hasSecond=!!el('edgeCaption2');const settings={caption1:el('edgeCaption1').value,caption2:hasSecond?el('edgeCaption2').value:layout.caption2,offset1:{x:Number(el('edgeCaption1X').value)||0,y:Number(el('edgeCaption1Y').value)||0},offset2:hasSecond?{x:Number(el('edgeCaption2X').value)||0,y:Number(el('edgeCaption2Y').value)||0}:layout.offset2,style1:styleFor(1),style2:hasSecond?styleFor(2):layout.style2};saveEdgeLayout(edge.id,settings);setDirty(true);renderDiagram(false);};
+            const apply=()=>{if(!project.settings.showCaptions&&!edge.branchCaptionRequired)return;if(!edgeUndoUsed){pushUndoSnapshot(edgeUndoSnapshot||makeUndoSnapshot());edgeUndoUsed=true;}const hasSecond=!!el('edgeCaption2');const settings={caption1:el('edgeCaption1').value,caption2:hasSecond?el('edgeCaption2').value:layout.caption2,offset1:{x:Number(el('edgeCaption1X').value)||0,y:Number(el('edgeCaption1Y').value)||0},offset2:hasSecond?{x:Number(el('edgeCaption2X').value)||0,y:Number(el('edgeCaption2Y').value)||0}:layout.offset2,style1:styleFor(1),style2:hasSecond?styleFor(2):layout.style2,loopAround:!!(project.layout.links[edge.id]&&project.layout.links[edge.id].loopAround)};saveEdgeLayout(edge.id,settings);setDirty(true);renderDiagram(false);};
             ['edgeCaption1','edgeCaption2','edgeCaption1X','edgeCaption1Y','edgeCaption2X','edgeCaption2Y','edgeCaption1Size','edgeCaption2Size','edgeCaption1Color','edgeCaption2Color','edgeCaption1Bold','edgeCaption2Bold','edgeCaption1Italic','edgeCaption2Italic','edgeCaption1Underline','edgeCaption2Underline'].forEach(id=>{const input=el(id);if(input){input.onfocus=()=>{edgeUndoSnapshot=makeUndoSnapshot();edgeUndoUsed=false;};input.oninput=apply;input.onchange=()=>{apply();if((project.settings.showCaptions||edge.branchCaptionRequired)&&id==='edgeCaption1'&&writeFlowgorithmEdgeCaption(edge,input.value)){const lineIndex=edge.sourceLineIndex;renderFromSource({fit:false,markDirty:false});const updated=currentModel.edges.find(e=>e.sourceLineIndex===lineIndex&&e.fromKey===edge.fromKey&&e.toKey===edge.toKey);if(updated){if(project.layout.links[edge.id]){project.layout.links[updated.id]=project.layout.links[edge.id];delete project.layout.links[edge.id];}selectedItems.delete('edge:'+edge.id);selectedItems.add('edge:'+updated.id);renderDiagram();}}if(id.endsWith('Color'))rememberRecentColour(input.value);persistLayoutSoon();edgeUndoSnapshot=null;edgeUndoUsed=false;};}});
         }else{
             const node=currentModel.nodes.find(n=>n.id===selectedId);
@@ -6606,6 +7067,70 @@ function flowVariableControlName(type,variable){
     const existing=new Set(currentModel.nodes.map(n=>String(n.key||'').toLowerCase()));
     let candidate=stem,index=2;while(existing.has(candidate.toLowerCase()))candidate=stem+index++;
     return candidate;
+}
+// Insert a new statement IN FRONT of the dropped-on statement. The source
+// graph, not merely the canvas picture, is rewired so saving/reloading is safe.
+function insertFlowgorithmBeforeControl(target,type){
+    if(!target||project.diagramType!=='flowchart'||project.sourceType!=='flowgorithm')return null;
+    const oldPosition=currentPositions.get(target.id);
+    if(!oldPosition)return null;
+    const oldPositions=new Map(currentModel.nodes.map(n=>[n.key,currentPositions.get(n.id)]).filter(([,p])=>!!p).map(([k,p])=>[k,{x:p.x,y:p.y}]));
+    const incoming=currentModel.edges.filter(e=>e.to===target.id&&e.from!==target.id);
+    let key=nextFlowgorithmKey(type);
+    const previousNode=incoming.length===1?currentModel.nodes.find(n=>n.id===incoming[0].from):null;
+    const recentVariable=previousNode?mostRecentFlowVariable(previousNode):'';
+    if((type==='input'||type==='output')&&recentVariable)key=flowVariableControlName(type,recentVariable);
+    let declaration=flowgorithmDeclarationForType(type,key);
+    if(type==='if')declaration=`if ${key} ${recentVariable||'undeclared_variable'} == ????`;
+    else if(type==='input'&&recentVariable)declaration=`input ${key} ${recentVariable} : ${JSON.stringify('Enter a new value for '+recentVariable+':')}`;
+    else if(type==='output'&&recentVariable&&previousNode&&['assign','declare'].includes(previousNode.flowKind))declaration=`output ${key} ${recentVariable}`;
+    else if(type==='assign'&&previousNode&&previousNode.flowKind==='declare')declaration=`assign ${key} ${previousNode.key} = 0`;
+    const lines=sourceEditor.value.replace(/\r/g,'').split('\n');
+    // Collect valid source lines first. Duplicate edges from the same source
+    // line need updating only once. Retain suffix labels (: TRUE, : FALSE etc.).
+    const incomingLineIndexes=new Set();
+    for(const edge of incoming){
+        const index=Number(edge.sourceLineIndex);
+        if(!Number.isInteger(index)||index<0||index>=lines.length)continue;
+        const parsed=parseArrowLine(stripLineComment(lines[index]).trim());
+        if(parsed&&String(edge.toKey)===target.key)incomingLineIndexes.add(index);
+    }
+    for(const index of incomingLineIndexes){
+        // Replace only the destination token of this connector, preserving label.
+        const line=lines[index];
+        const arrow=/^(\s*[^\n]*?->\s*)([^\s:]+)([\s\S]*)$/.exec(line);
+        if(arrow&&arrow[2]===target.key)lines[index]=arrow[1]+key+arrow[3];
+    }
+    // Add a single bridge even when the old node has several incoming edges.
+    const layoutAt=flowgorithmLayoutStartIndex(lines);
+    lines.splice(layoutAt,0,`${key} -> ${target.key}${['if','while','for'].includes(type)?' : TRUE':''}`);
+    insertFlowgorithmDeclarationIntoLines(lines,declaration);
+    setFlowgorithmSourceLines(lines);
+    renderFromSource({fit:false,markDirty:false,deferPaint:true});
+    const newId=stableId('flowgorithm',key),created=currentModel.nodes.find(n=>n.id===newId);
+    if(!created){renderDiagram();return null;}
+    const spacing=Math.max(110,(nodeSizes.get(created.id)?.height||60)/2+(nodeSizes.get(target.id)?.height||60)/2+35);
+    const originalY=oldPosition.y;
+    // Preserve relative horizontal positions; shift every existing control at
+    // this level or below, including disconnected objects, by the same amount.
+    for(const node of currentModel.nodes){
+        if(node.id===created.id)continue;
+        const original=oldPositions.get(node.key);if(!original)continue;
+        const y=original.y>=originalY-1?original.y+spacing:original.y;
+        const point={x:original.x,y};
+        currentPositions.set(node.id,point);project.layout.positions[node.id]=point;
+        project.layout.positionsByKey[nodeLayoutKey(node)]={id:node.id,key:node.key,type:node.type,x:point.x,y:point.y};
+    }
+    const point={x:oldPosition.x,y:oldPosition.y};
+    currentPositions.set(created.id,point);project.layout.positions[created.id]=point;
+    project.layout.positionsByKey[nodeLayoutKey(created)]={id:created.id,key:created.key,type:created.type,x:point.x,y:point.y};
+    if(isFixedVertical()){
+        currentPositions=fixedVerticalPositions(currentModel);
+        currentModel.nodes.forEach(node=>{const pos=currentPositions.get(node.id);if(pos){project.layout.positions[node.id]={x:pos.x,y:pos.y};project.layout.positionsByKey[nodeLayoutKey(node)]={id:node.id,key:node.key,type:node.type,x:pos.x,y:pos.y};}});
+    }
+    selectItem('node',created.id,false);
+    syncFlowgorithmVisualPositionsToSource();setDirty(true);renderDiagram();persistLayoutSoon();
+    return created.id;
 }
 function insertFlowgorithmObjectOnEdge(edge,type,x,y){
     if(!edge||project.sourceType!=='flowgorithm')return null;
@@ -6839,8 +7364,8 @@ function flowchartDropEdge(x,y,nearest=false){
             if(d<best){best=d;match=item.edge;}
         }
     }
-    // 34 screen pixels either side of the connector for direct insertion.
-    return nearest||best<=34/Math.max(.2,camera.scale)?match:null;
+    // Wider, zoom-independent pointer tolerance: 56 screen pixels on either side.
+    return nearest||best<=56/Math.max(.2,camera.scale)?match:null;
 }
 function currentDropMode(event){
     if((event.ctrlKey||event.metaKey)&&event.shiftKey)return'append';
@@ -6921,7 +7446,7 @@ Start -> End
     return`<p class="share-note">${escapeHtml(sourceDescription())}</p>${flowNote}<div class="syntax-help"><code>${escapeHtml(examples[project.sourceType]||examples.qcaa)}</code></div><p class="share-note">Changes render automatically after a short pause. Press <strong>Ctrl+Enter</strong> to render immediately.</p>`;
 }
 function showSyntaxHelp(){showModal('Notation help',syntaxHelpHtml(),'<button class="primary" data-done>Done</button>',false);el('modalRoot').querySelector('[data-done]').onclick=closeModal;}
-function showAbout(){showModal('About Charter','<p class="share-note"><strong>Charter 0.0.5</strong></p><p class="share-note">Charter 0.0.5 supports four diagram types: flowcharts, data-flow diagrams, entity-relationship diagrams and mind maps. Flowcharts, DFDs and ERDs use a text-driven editor; mind maps use a hierarchical visual editor.</p><p class="share-note">Shared diagrams are stored in the MySQL or MariaDB database configured in <code>charter-config.php</code>. Anyone with an unguessable editable share link can modify that shared copy. An always-new-session link creates an independent copy for every visitor.</p><p class="share-note">Copyright (c) 2026 Simon Walker &amp; Timothy Lever, Queensland Department of Education</p><p class="share-note"><a href="https://github.com/simonnjwalker/charter" target="_blank" rel="noopener noreferrer">https://github.com/simonnjwalker/charter</a></p>','<button class="primary" data-done>Done</button>',false);el('modalRoot').querySelector('[data-done]').onclick=closeModal;}
+function showAbout(){showModal('About Charter','<p class="share-note"><strong>Charter 0.0.6</strong></p><p class="share-note">Charter 0.0.6 supports four diagram types: flowcharts, data-flow diagrams, entity-relationship diagrams and mind maps. Flowcharts, DFDs and ERDs use a text-driven editor; mind maps use a hierarchical visual editor.</p><p class="share-note">Shared diagrams are stored in the MySQL or MariaDB database configured in <code>charter-config.php</code>. Anyone with an unguessable editable share link can modify that shared copy. An always-new-session link creates an independent copy for every visitor.</p><p class="share-note">Copyright (c) 2026 Simon Walker &amp; Timothy Lever, Queensland Department of Education</p><p class="share-note"><a href="https://github.com/simonnjwalker/charter" target="_blank" rel="noopener noreferrer">https://github.com/simonnjwalker/charter</a></p>','<button class="primary" data-done>Done</button>',false);el('modalRoot').querySelector('[data-done]').onclick=closeModal;}
 
 async function sendServerRequest(action,payload=null,query={}){const address=new URL(window.location.href);address.search='';address.hash='';address.searchParams.set('charter_action',action);Object.keys(query).forEach(k=>address.searchParams.set(k,query[k]));const options={cache:'no-store'};if(payload!==null){options.method='POST';options.headers={'Content-Type':'application/json'};options.body=JSON.stringify(payload);}const response=await fetch(address.pathname+address.search,options),raw=await response.text();let data;try{data=JSON.parse(raw);}catch(error){throw new Error('The server returned an invalid response. '+raw.slice(0,180));}if(!data.ok)throw new Error(data.error||'The server request failed.');return data;}
 async function loadSharedProject(shareId){el('loadingCover').classList.remove('hidden');try{const data=await sendServerRequest('load',null,{share:shareId});setProject(data.project,{serverShareId:data.shareId,serverShareUrl:data.shareUrl,serverNewSessionUrl:data.newSessionUrl});toast('Shared diagram loaded.','success');}finally{el('loadingCover').classList.add('hidden');}}
@@ -7098,7 +7623,7 @@ function openExportSqlDialog(defaultPython=false){
 }
 
 function openCaptionCleanupDialog(){const root=showModal('Clear all existing captions',`<p><strong>Warning: irreversible live database change.</strong> This will erase captions from all saved Flowcharting projects and templates, including other users' diagrams. Back up the database first.</p><p>The administrator password is <code>$adminPassword</code> in <code>charter-config.php</code>.</p><div class="field"><label>Administrator password</label><input id="captionCleanupPassword" type="password" autocomplete="current-password"></div><div class="field"><label>Type CLEAR ALL CAPTIONS</label><input id="captionCleanupConfirm" autocomplete="off"></div><p id="captionCleanupStatus"></p>`,`<button data-cancel>Cancel</button><button class="primary" data-clear>Clear captions from database</button>`,true);root.querySelector('[data-cancel]').onclick=closeModal;root.querySelector('[data-clear]').onclick=async()=>{const pass=el('captionCleanupPassword').value,confirmText=el('captionCleanupConfirm').value;if(confirmText!=='CLEAR ALL CAPTIONS'||!pass){el('captionCleanupStatus').textContent='Enter password and confirmation phrase.';return;}if(!confirm('FINAL WARNING: Delete all existing Flowcharting captions from the live database?'))return;try{const result=await sendServerRequest('clear_captions',{password:pass,confirmText,confirmed:true});closeModal();toast('Caption cleanup completed: '+result.updatedRecords+' saved records updated.','success');}catch(error){el('captionCleanupStatus').textContent=error.message;}};}
-function handleAction(action){closeMenus();if(action==='new-object')openNewObjectDialog();else if(action==='templates')openTemplates();else if(action==='new-flow')newDiagram('flowchart','flowgorithm');else if(action==='new-dfd')newDiagram('dfd','dfd');else if(action==='new-erd')newDiagram('erd','sql');else if(action==='new-mindmap')window.location.href='?mindmap=1&new=1';else if(action==='open-json')openJson();else if(action==='save-share')openShareDialog();else if(action==='save-template')openSaveTemplateDialog();else if(action==='save-browser')saveBrowser();else if(action==='browser-projects')browserProjects();else if(action==='download-json')downloadJson();else if(action==='export-svg')exportSvg();else if(action==='export-png')exportPng();else if(action==='export-sql')openExportSqlDialog();else if(action==='export-python')exportCode('python');else if(action==='export-qcaa')exportCode('qcaa');else if(action==='export-gatton')exportCode('gatton');else if(action==='export-javascript')exportCode('javascript');else if(action==='print')window.print();else if(action==='render')renderFromSource({fit:false});else if(action==='run')toggleProgramRun();else if(action==='auto-layout')autoLayout();else if(action==='fit')fitDiagram();else if(action==='toggle-grid'){pushUndoSnapshot();project.settings.showGrid=!project.settings.showGrid;applyGrid();setDirty(true);}else if(action==='toggle-captions'){pushUndoSnapshot();project.settings.showCaptions=!project.settings.showCaptions;project.settings.showEdgeLabels=project.settings.showCaptions;renderDiagram();setDirty(true);toast(project.settings.showCaptions?'Captions enabled.':'Captions hidden.','success');}else if(action.startsWith('drop-mode-')){project.settings.dragDropMode=action.slice(10);document.querySelectorAll('[data-action^=drop-mode-]').forEach(b=>{b.textContent=(b.dataset.action==='drop-mode-'+project.settings.dragDropMode?'✓ ':'')+b.textContent.replace(/^✓\s*/, '');});setDirty(true);}else if(action==='toggle-run-keep-open'){project.settings.runKeepOpen=project.settings.runKeepOpen===false;const b=document.querySelector('[data-action=toggle-run-keep-open]');if(b)b.textContent=(project.settings.runKeepOpen?'✓ ':'')+'Output until closed';setDirty(true);}else if(action==='toggle-push-insertion'){pushUndoSnapshot();project.settings.pushOnInsertion=project.settings.pushOnInsertion===false;const item=document.querySelector('[data-action=\"toggle-push-insertion\"]');if(item)item.textContent=(project.settings.pushOnInsertion?'✓ ':'')+'Push On Insertion';setDirty(true);toast('Push On Insertion '+(project.settings.pushOnInsertion?'enabled':'disabled'),'success');}else if(action==='zoom-in')zoom(1.2);else if(action==='zoom-out')zoom(.83);else if(action==='toggle-source')setSourcePanelVisible(!isSourcePanelVisible());else if(action==='syntax-help')showSyntaxHelp();else if(action==='about')showAbout();}
+function handleAction(action){closeMenus();if(action==='edit-cut'){copyCanvasSelection(true);return;}if(action==='edit-copy'){copyCanvasSelection(false);return;}if(action==='edit-paste'){pasteCanvasClipboard();return;}if(action==='new-object')openNewObjectDialog();else if(action==='templates')openTemplates();else if(action==='new-flow')newDiagram('flowchart','flowgorithm');else if(action==='new-dfd')newDiagram('dfd','dfd');else if(action==='new-erd')newDiagram('erd','sql');else if(action==='new-mindmap')window.location.href='?mindmap=1&new=1';else if(action==='open-json')openJson();else if(action==='save-share')openShareDialog();else if(action==='save-template')openSaveTemplateDialog();else if(action==='save-browser')saveBrowser();else if(action==='browser-projects')browserProjects();else if(action==='download-json')downloadJson();else if(action==='export-svg')exportSvg();else if(action==='export-png')exportPng();else if(action==='export-sql')openExportSqlDialog();else if(action==='export-python')exportCode('python');else if(action==='export-qcaa')exportCode('qcaa');else if(action==='export-gatton')exportCode('gatton');else if(action==='export-javascript')exportCode('javascript');else if(action==='print')window.print();else if(action==='render')renderFromSource({fit:false});else if(action==='run')toggleProgramRun();else if(action==='auto-layout')autoLayout();else if(action==='fit')fitDiagram();else if(action==='toggle-grid'){pushUndoSnapshot();project.settings.showGrid=!project.settings.showGrid;applyGrid();setDirty(true);}else if(action==='toggle-captions'){pushUndoSnapshot();project.settings.showCaptions=!project.settings.showCaptions;project.settings.showEdgeLabels=project.settings.showCaptions;renderDiagram();setDirty(true);toast(project.settings.showCaptions?'Captions enabled.':'Captions hidden.','success');}else if(action.startsWith('drop-mode-')){project.settings.dragDropMode=action.slice(10);document.querySelectorAll('[data-action^=drop-mode-]').forEach(b=>{b.textContent=(b.dataset.action==='drop-mode-'+project.settings.dragDropMode?'✓ ':'')+b.textContent.replace(/^✓\s*/, '');});setDirty(true);}else if(action==='toggle-run-keep-open'){project.settings.runKeepOpen=project.settings.runKeepOpen===false;const b=document.querySelector('[data-action=toggle-run-keep-open]');if(b)b.textContent=(project.settings.runKeepOpen?'✓ ':'')+'Output until closed';setDirty(true);}else if(action==='toggle-push-insertion'){pushUndoSnapshot();project.settings.pushOnInsertion=project.settings.pushOnInsertion===false;const item=document.querySelector('[data-action=\"toggle-push-insertion\"]');if(item)item.textContent=(project.settings.pushOnInsertion?'✓ ':'')+'Push On Insertion';setDirty(true);toast('Push On Insertion '+(project.settings.pushOnInsertion?'enabled':'disabled'),'success');}else if(action==='zoom-in')zoom(1.2);else if(action==='zoom-out')zoom(.83);else if(action==='toggle-source')setSourcePanelVisible(!isSourcePanelVisible());else if(action==='syntax-help')showSyntaxHelp();else if(action==='about')showAbout();}
 document.querySelectorAll('[data-action]').forEach(button=>button.addEventListener('click',event=>{event.stopPropagation();handleAction(button.getAttribute('data-action'));}));
 
 function isSourcePanelVisible(){return !document.body.classList.contains('source-panel-hidden');}
@@ -7143,14 +7668,14 @@ async function saveWithShortcut(){
         toast(error.message,'error');
     }
 }
-document.addEventListener('keydown',event=>{if(event.key==='Escape'&&runState.active&&!el('modalRoot').querySelector('.modal-backdrop')){stopProgramRun();return;}if(event.key==='Escape'&&el('modalRoot').querySelector('.modal-backdrop')){event.preventDefault();event.stopPropagation();closeModal();return;}if(event.altKey&&event.shiftKey&&event.key==='Enter'){event.preventDefault();toggleProgramRun();return;}if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'&&!event.shiftKey){event.preventDefault();undoLastChange();return;}if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){event.preventDefault();saveWithShortcut();}if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='o'){event.preventDefault();openJson();}if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();renderFromSource({fit:false});}if((event.key==='Delete'||event.key==='Backspace')&&!event.target.matches('input,textarea,select,[contenteditable=true]')&&selectedItems.size){event.preventDefault();deleteSelectedDiagramItem();return;}if(event.key==='Escape'){if(el('modalRoot').querySelector('.modal-backdrop')){event.preventDefault();event.stopPropagation();closeModal();}else closeMenus();}});
+document.addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&!event.altKey&&!event.target.closest('input,textarea,select,[contenteditable=true]')&&['x','c','v'].includes(event.key.toLowerCase())){event.preventDefault();const key=event.key.toLowerCase();if(key==='x')copyCanvasSelection(true);else if(key==='c')copyCanvasSelection(false);else pasteCanvasClipboard();return;}if(event.key==='Escape'&&runState.active&&!el('modalRoot').querySelector('.modal-backdrop')){stopProgramRun();return;}if(event.key==='Escape'&&el('modalRoot').querySelector('.modal-backdrop')){event.preventDefault();event.stopPropagation();closeModal();return;}if(event.altKey&&event.shiftKey&&event.key==='Enter'){event.preventDefault();toggleProgramRun();return;}if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'&&!event.shiftKey){event.preventDefault();undoLastChange();return;}if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){event.preventDefault();saveWithShortcut();}if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='o'){event.preventDefault();openJson();}if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();renderFromSource({fit:false});}if((event.key==='Delete'||event.key==='Backspace')&&!event.target.matches('input,textarea,select,[contenteditable=true]')&&selectedItems.size){event.preventDefault();deleteSelectedDiagramItem();return;}if(event.key==='Escape'){if(el('modalRoot').querySelector('.modal-backdrop')){event.preventDefault();event.stopPropagation();closeModal();}else closeMenus();}});
 
 async function initialise(){initialiseSourcePanelResize();initialiseSidePanelResize();setProject(INITIAL_PROJECT);setSourcePanelVisible(REQUESTED_SOURCE_VISIBILITY==='show'||(REQUESTED_SOURCE_VISIBILITY!=='hide'&&window.innerWidth>820));if(INITIAL_NEW_SESSION_ID){try{await createNewSession(INITIAL_NEW_SESSION_ID);}catch(error){toast(error.message,'error');}}else if(INITIAL_SHARE_ID){try{await loadSharedProject(INITIAL_SHARE_ID);}catch(error){toast(error.message,'error');}}}
 initialise();
 })();
 </script>
 <script>
-/* Charter 0.0.5: unified independent horizontal panel resizing and View visibility. */
+/* Charter 0.0.6: unified independent horizontal panel resizing and View visibility. */
 (()=>{
  'use strict';
  const workspace=document.querySelector('.workspace');if(!workspace)return;

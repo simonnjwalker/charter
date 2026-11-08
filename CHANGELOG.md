@@ -1,3 +1,12 @@
+## [0.0.6] - 2026-11-08
+### Added
+- Cut-Copy-Paste
+- Select multiple controls
+- Controls move down when inserted over the top
+- Added Loop Around option for connectors
+### Fixed
+- Lagging and speed issues in canvas
+
 ## [0.0.5] - 2026-11-02
 ### Added
 - Conditional controls (IF/WHILE/FOR) show True/False in connectors by default
