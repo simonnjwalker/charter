@@ -1,10 +1,87 @@
 <?php
-/* Charter 0.0.6: fourth diagram type, Mind Map. The original MindCanvas editor
- * runs under this router, sharing Charter's configuration and PHP entrypoint. */
 
-/** Charter 0.0.6 unified schema bootstrap. Idempotent on each request. */
+/* Charter 0.0.7: A one-page application for building and sharing flow charts, DFDs, ERDs, and mindmaps.
+(c) 2026 Simon Walker and Timothy Lever, Queensland Department of Education. MIT licence:
+// https://github.com/simonnjwalker/charter/blob/main/LICENSE
+
+To install:
+1 - create a MariaDb/MySQL database
+2 - run the SQL below
+3 - setup the charter-config.php file in the same directory using the username/database details you setup in step 2
+
+This is the SQL needed to create the DB:
+
+
+-- START SETUP SQL
+SET SQL_MODE = "NO_AUTO_VALUE_ON_ZERO";
+START TRANSACTION;
+SET time_zone = "+00:00";
+
+CREATE TABLE `charter_projects` (
+  `share_key` char(32) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `title` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `project_json` longtext COLLATE utf8mb4_unicode_ci NOT NULL,
+  `created_at` datetime NOT NULL,
+  `updated_at` datetime NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE `charter_templates` (
+  `template_key` char(32) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `title` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `description` varchar(500) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `diagram_type` varchar(30) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `source_type` varchar(30) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `project_json` longtext COLLATE utf8mb4_unicode_ci NOT NULL,
+  `created_at` datetime NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT INTO `charter_templates` (`template_key`, `title`, `description`, `diagram_type`, `source_type`, `project_json`, `created_at`) VALUES
+('1dd7ad14cbccddc297839757a4b3ba78', 'Simple DFD', 'Basic data flow diagram showing three processes, two entities, and two data stores.', 'dfd', 'dfd', '{\"id\":\"e079c7f9-d350-4c6d-a4ff-f47745107da0\",\"title\":\"Simple DFD\",\"diagramType\":\"dfd\",\"sourceType\":\"dfd\",\"source\":\"title: Online ordering system\\n\\nentity Customer \\\"Customer\\\"\\nentity PaymentGateway \\\"Payment gateway\\\"\\nprocess CaptureOrder \\\"Capture order\\\"\\nprocess TakePayment \\\"Take payment\\\"\\nprocess PrepareOrder \\\"Prepare order\\\"\\nstore D1 \\\"Orders\\\"\\nstore D2 \\\"Products\\\"\\n\\nCustomer -> CaptureOrder : order details\\nCaptureOrder -> D2 : product query\\nD2 -> CaptureOrder : product details\\nCaptureOrder -> D1 : new order\\nCaptureOrder -> TakePayment : payment request\\nTakePayment -> PaymentGateway : card transaction\\nPaymentGateway -> TakePayment : payment result\\nTakePayment -> PrepareOrder : paid order\\nPrepareOrder -> Customer : collection notice\",\"direction\":\"TB\",\"layout\":{\"positions\":{\"dfd-6742fc93\":{\"x\":-456.7888579505959,\"y\":1.4609275873113052},\"dfd-745a2473\":{\"x\":459.82806195269575,\"y\":128.97428924784114},\"dfd-fc51c871\":{\"x\":0,\"y\":-240},\"dfd-554d531a\":{\"x\":0,\"y\":0},\"dfd-f223a6da\":{\"x\":-1.827950390267283,\"y\":256.45057734115665},\"dfd-65c50408\":{\"x\":432.58241758241763,\"y\":-375.2600662874215},\"dfd-68c508c1\":{\"x\":445.9072121444448,\"y\":-100.4450010543457}},\"positionsByKey\":{\"entity|Customer\":{\"id\":\"dfd-6742fc93\",\"key\":\"Customer\",\"type\":\"entity\",\"x\":-456.7888579505959,\"y\":1.4609275873113052},\"entity|PaymentGateway\":{\"id\":\"dfd-745a2473\",\"key\":\"PaymentGateway\",\"type\":\"entity\",\"x\":459.82806195269575,\"y\":128.97428924784114},\"process|CaptureOrder\":{\"id\":\"dfd-fc51c871\",\"key\":\"CaptureOrder\",\"type\":\"process\",\"x\":0,\"y\":-240},\"process|TakePayment\":{\"id\":\"dfd-554d531a\",\"key\":\"TakePayment\",\"type\":\"process\",\"x\":0,\"y\":0},\"process|PrepareOrder\":{\"id\":\"dfd-f223a6da\",\"key\":\"PrepareOrder\",\"type\":\"process\",\"x\":-1.827950390267283,\"y\":256.45057734115665},\"store|D1\":{\"id\":\"dfd-65c50408\",\"key\":\"D1\",\"type\":\"store\",\"x\":432.58241758241763,\"y\":-375.2600662874215},\"store|D2\":{\"id\":\"dfd-68c508c1\",\"key\":\"D2\",\"type\":\"store\",\"x\":445.9072121444448,\"y\":-100.4450010543457}},\"links\":[],\"nodeStyles\":[],\"nodeStylesByKey\":[],\"textboxes\":[],\"hiddenNodes\":[],\"hiddenEdges\":[],\"objectCount\":7},\"settings\":{\"showGrid\":true,\"showEdgeLabels\":true,\"fontSize\":14,\"lineType\":\"orthogonal\"},\"dates\":{\"created\":1792585001955,\"modified\":1792585001955}}', '2026-10-21 12:16:41'),
+('3a1666c6099d21f0b10824cf4695156b', 'Simple Flowchart', 'Basic flowchart showing the main controls.  Click \"Run\" to see this in action.', 'flowchart', 'flowgorithm', '{\"id\":\"50110f49-cd11-4d34-a0cf-9f86a7e841af\",\"title\":\"SImple Flowchart\",\"diagramType\":\"flowchart\",\"sourceType\":\"flowgorithm\",\"source\":\"title My Flow Diagram\\n\\n# you can double-click on the\\n# line between the Start and End\\n# in order to add a new item\\nterminal Start\\nterminal End\\n\\ninput AskForName YourName : \\\"What is your name?\\\"\\n\\ndeclare YourName : \\\"YourName\\\"\\n\\n\\nif CheckIfEmma YourName == \\\"Emma\\\"\\n\\noutput ShowHelloEmma \\\"Hello Emma!\\\"\\n\\noutput ShowYourNameIs \\\"Your name is \\\" + YourName\\n\\nStart -> YourName\\nAskForName -> CheckIfEmma\\nCheckIfEmma -> ShowHelloEmma : \\\"TRUE\\\"\\nShowHelloEmma -> End\\nYourName -> AskForName\\n\\nCheckIfEmma -> ShowYourNameIs : \\\"FALSE\\\"\\n\\nShowYourNameIs -> End\\n\\n\\n\\n\\n\\n\\n# @visual-layout positions for the designer:\\n# @position Start 0 -350\\n# @position End -1.29 415.96\\n# @position AskForName 0 -70\\n# @position YourName 0 -210\\n# @position CheckIfEmma 0 70\\n# @position ShowHelloEmma -330 210\\n# @position ShowYourNameIs 330 210\\n\",\"direction\":\"TB\",\"layout\":{\"positions\":{\"flowgorithm-554444c9\":{\"x\":0,\"y\":-350},\"flowgorithm-cdc98418\":{\"x\":-1.2932514313750385,\"y\":415.9568590221022},\"flowgorithm-f57d2370\":{\"x\":0,\"y\":-70},\"flowgorithm-b604bf4b\":{\"x\":0,\"y\":-210},\"flowgorithm-89b7d76e\":{\"x\":0,\"y\":70},\"flowgorithm-24ed587e\":{\"x\":-330,\"y\":210},\"flowgorithm-c51b6976\":{\"x\":330,\"y\":210}},\"positionsByKey\":{\"flow|Start\":{\"id\":\"flowgorithm-554444c9\",\"key\":\"Start\",\"type\":\"flow\",\"x\":0,\"y\":-350},\"flow|End\":{\"id\":\"flowgorithm-cdc98418\",\"key\":\"End\",\"type\":\"flow\",\"x\":-1.2932514313750385,\"y\":415.9568590221022},\"flow|AskForName\":{\"id\":\"flowgorithm-f57d2370\",\"key\":\"AskForName\",\"type\":\"flow\",\"x\":0,\"y\":-70},\"flow|YourName\":{\"id\":\"flowgorithm-b604bf4b\",\"key\":\"YourName\",\"type\":\"flow\",\"x\":0,\"y\":-210},\"flow|CheckIfEmma\":{\"id\":\"flowgorithm-89b7d76e\",\"key\":\"CheckIfEmma\",\"type\":\"flow\",\"x\":0,\"y\":70},\"flow|ShowHelloEmma\":{\"id\":\"flowgorithm-24ed587e\",\"key\":\"ShowHelloEmma\",\"type\":\"flow\",\"x\":-330,\"y\":210},\"flow|ShowYourNameIs\":{\"id\":\"flowgorithm-c51b6976\",\"key\":\"ShowYourNameIs\",\"type\":\"flow\",\"x\":330,\"y\":210}},\"links\":[],\"nodeStyles\":[],\"nodeStylesByKey\":[],\"textboxes\":[],\"hiddenNodes\":[],\"hiddenEdges\":[],\"objectCount\":7},\"settings\":{\"showGrid\":true,\"showEdgeLabels\":true,\"fontSize\":14,\"lineType\":\"orthogonal\"},\"dates\":{\"created\":1792581805794,\"modified\":1792581805794}}', '2026-10-21 11:23:25');
+
+-- Indexes for table `charter_projects`
+ALTER TABLE `charter_projects`
+  ADD PRIMARY KEY (`share_key`),
+  ADD KEY `idx_charter_updated` (`updated_at`);
+
+-- Indexes for table `charter_templates`
+ALTER TABLE `charter_templates`
+  ADD PRIMARY KEY (`template_key`),
+  ADD KEY `idx_charter_template_created` (`created_at`),
+  ADD KEY `idx_charter_template_type` (`diagram_type`);
+COMMIT;
+
+-- END SETUP SQL
+
+
+
+This is the information to go into charter-config.php :
+
+
+// START charter-config.php information
+
+$dbHost = 'localhost';                         // from your database setup - localhost for host installs
+$dbName = 'DATABASE_NAME';                     // from your database setup
+$dbUser = 'DATABASE_USER_NAME';                // from your database setup
+$dbPassword = 'DATABASE_USER_PASSWORD';        // from your database setup
+$adminPassword = 'APPLICATION_USER_PASSWORD';  // you choose this - users must enter this to save templates etc
+$urlRoot = 'APPLICATION_URL_ROOT';             // Optional directory URL
+
+// Optional absolute directory URL when Charter sits behind a proxy or the
+// automatically detected URL is not correct. Leave blank in most installs.
+// Example: https://example.com/tools
+$urlRoot = '';
+
+// END charter-config.php information
+
+
+
+
+
+*/
 function charter_schema_bootstrap($db) {
-    // Deliberately disabled for version 0.0.6: this application contains live data.
+    // Deliberately disabled for version 0.0.7: this application contains live data.
     // Database migrations require separate review and explicit administrator approval.
     throw new RuntimeException('Automatic database schema changes are disabled on live data.');
 }
@@ -282,6 +359,7 @@ function mindmap_database_key_exists($mysqli, $shareKey)
 
     mindmap_database_execute($statement);
 
+    $foundShareKey = null;
     if (!$statement->bind_result($foundShareKey)) {
         $number = $statement->errno;
         $message = $statement->error;
@@ -2976,7 +3054,7 @@ function buildExportSvg(options={}) {
     const content=createSvg('g');
     content.appendChild(branchesLayer.cloneNode(true));
     if(options.includeCrossConnections!==false)content.appendChild(crossLayer.cloneNode(true));
-    content.appendChild(nodesLayer.cloneNode(true));
+    content.appendChild(nodesLayer.cloneNode(true));const arrowOverlay=viewport.querySelector('#charterArrowOverlay');if(arrowOverlay)content.appendChild(arrowOverlay.cloneNode(true));
     content.querySelectorAll('.selection-ring,.child-drag-control,.child-preview').forEach(n=>n.remove());content.querySelectorAll('.node').forEach(n=>n.classList.remove('selected'));out.appendChild(content);
     return {svg:out,width:w,height:h};
 }
@@ -3075,7 +3153,7 @@ initialiseApplication();
 })();
 </script>
 <script>
-/* Common Charter 0.0.6 panel management for flowcharts, DFDs, ERDs and mind maps. */
+/* Common Charter 0.0.7 panel management for flowcharts, DFDs, ERDs and mind maps. */
 (()=>{
  'use strict';
  const map={settings:document.getElementById('charterSettingsPanel'),source:document.getElementById('sourcePanel'),controls:document.getElementById('controlsPanel')||document.querySelector('.left-panel'),inspector:document.getElementById('inspectorPanel')||document.getElementById('rightPanel'),canvas:document.getElementById('canvasShell')};
@@ -3125,7 +3203,7 @@ initialiseApplication();
  },true);
  if(!mind){const previous=document.querySelector('[data-action="toggle-source"]');if(previous)previous.addEventListener('click',()=>{setTimeout(()=>{if(document.body.classList.contains('source-panel-hidden'))hidden.add('source');else hidden.delete('source');refresh()},0)})}
  // Do not overwrite URL-driven source visibility.
- if(!mind){const hiddenSource=document.body.classList.contains('source-panel-hidden')||new URLSearchParams(location.search).get('source')==='hide';if(hiddenSource)hidden.add('source')}
+ if(!mind){const hiddenSource=new URLSearchParams(location.search).get('source')==='hide';if(hiddenSource)hidden.add('source')}
  refresh();
 })();
 </script>
@@ -3135,7 +3213,7 @@ initialiseApplication();
 <?php
 /*
  * Charter - single-file diagram editor for flowcharts, DFDs, ERDs and MindCanvas mind maps.
- * Application version 0.0.6
+ * Application version 0.0.7
  * -------------------------
  *
  * Keep charter-config.php in the same directory as this file.
@@ -4361,7 +4439,7 @@ if ($showLanding) {
 *{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden}body{font-family:Inter,"Segoe UI",Arial,sans-serif;color:var(--ink);background:var(--canvas);font-size:14px}button,input,select,textarea{font:inherit}.hidden{display:none!important}.app{height:100%;display:grid;grid-template-rows:48px 45px minmax(0,1fr) 28px}.topbar{display:flex;align-items:center;gap:14px;padding:0 13px;color:#fff;background:linear-gradient(180deg,var(--top),var(--top2));box-shadow:0 1px 5px rgba(0,0,0,.38);z-index:30}.brand{display:flex;align-items:center;gap:8px;font-weight:800;font-size:16px}.brand-mark{width:28px;height:28px;border-radius:7px;background:linear-gradient(145deg,#ffbd52,#e4800c);position:relative}.brand-mark:before{content:"";position:absolute;width:16px;height:3px;left:6px;top:7px;background:#fff;box-shadow:0 6px 0 #fff,0 12px 0 #fff}.brand-mark:after{content:"";position:absolute;width:3px;height:16px;left:12px;top:6px;background:#fff}.menu-strip{display:flex;height:100%}.menu{position:relative}.menu>button{height:100%;border:0;background:transparent;color:#e8edf1;padding:0 10px;cursor:pointer}.menu>button:hover,.menu.open>button{background:rgba(255,255,255,.1)}.dropdown{display:none;position:absolute;top:45px;left:0;min-width:240px;padding:6px;background:#fff;color:var(--ink);border:1px solid #c7ced5;border-radius:5px;box-shadow:var(--shadow);z-index:200}.menu.open .dropdown{display:block}.dropdown button{display:flex;justify-content:space-between;width:100%;border:0;background:transparent;padding:8px 10px;border-radius:4px;text-align:left;color:var(--ink);cursor:pointer}.dropdown button:hover{background:#edf2f6}.dropdown hr{border:0;border-top:1px solid #e1e5e9;margin:5px 0}.nested-menu{position:relative}.nested-menu>button:after{content:'›';font-size:18px;line-height:1}.nested-menu-panel{display:none;position:absolute;left:100%;top:-6px;min-width:220px;padding:6px;background:#fff;border:1px solid #c7ced5;border-radius:5px;box-shadow:var(--shadow);z-index:210}.nested-menu:hover>.nested-menu-panel,.nested-menu:focus-within>.nested-menu-panel{display:block}kbd{font-size:10px;color:#69747f;border:1px solid #d2d7dc;border-bottom-width:2px;border-radius:3px;background:#f1f3f5;padding:1px 4px}.title-wrap{margin-left:auto;display:flex;align-items:center;gap:8px;min-width:200px;max-width:470px;flex:1;justify-content:flex-end}.unsaved-dot{width:8px;height:8px;border-radius:50%;background:#ffb43e;opacity:0}.unsaved-dot.show{opacity:1}#diagramTitle{width:min(100%,350px);background:rgba(255,255,255,.09);color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:4px;padding:6px 9px;outline:none}.toolbar{display:flex;align-items:center;gap:5px;padding:5px 8px;background:#e7ecf0;border-bottom:1px solid #c4ccd3;overflow-x:auto;z-index:20}.toolbar label{font-size:11px;color:#53616d}.toolbar select{height:33px;border:1px solid #b9c3cb;border-radius:4px;background:#fff;padding:0 7px}.tool-btn{height:33px;min-width:34px;border:1px solid transparent;border-radius:4px;background:transparent;color:#26333e;cursor:pointer;padding:0 9px}.tool-btn:hover{background:#fff;border-color:#c4cbd2}.tool-btn:disabled{opacity:.45;cursor:not-allowed}.sep{width:1px;height:27px;background:#c4ccd2;margin:0 4px}.zoom-readout{min-width:49px;text-align:center;font-size:12px;color:#53616d}.workspace{min-height:0;display:grid;grid-template-columns:var(--source-width) var(--controls-width,190px) minmax(320px,1fr) var(--inspector-width,270px)}.panel{min-height:0;background:var(--panel);z-index:10}.source-panel{border-right:1px solid var(--line);display:flex;flex-direction:column;position:relative}.source-resize-handle{position:absolute;top:0;right:-5px;bottom:0;width:10px;cursor:col-resize;z-index:25;background:transparent}.source-resize-handle:hover,.source-resize-handle.active{background:rgba(36,117,168,.18)}.controls-panel{border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden;position:relative}.controls-resize-handle{position:absolute;top:0;right:-5px;bottom:0;width:10px;cursor:col-resize;z-index:25;background:transparent}.controls-resize-handle:hover,.controls-resize-handle.active{background:rgba(36,117,168,.18)}.control-palette{padding:8px;overflow:auto;display:flex;flex-direction:column;gap:7px}.control-item{display:grid;grid-template-columns:42px minmax(0,1fr);gap:8px;align-items:center;width:100%;padding:7px;border:1px solid #cbd3da;border-radius:6px;background:#fff;color:#263640;text-align:left;cursor:grab;user-select:none}.control-item:hover{background:#eef5fa;border-color:#8eb5cf}.control-item:active{cursor:grabbing}.control-palette.flowgorithm-palette{display:block;padding:8px 7px 12px}.flowgorithm-statement-header{background:#a9c9f2;border:1px solid #6187b4;padding:7px 9px;margin-bottom:10px;font-size:12px;color:#172b41}.flowgorithm-groups{display:grid;grid-template-columns:repeat(4,minmax(72px,1fr));gap:8px}.flow-control-group{min-width:0}.flow-control-group-title{text-align:center;font-size:11px;color:#192633;margin:0 0 8px;white-space:nowrap}.flowgorithm-palette .control-item{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:4px;border:0;background:transparent;padding:3px 1px;cursor:grab}.flowgorithm-palette .control-item:hover{background:#f0f4f7;border-color:transparent}.flowgorithm-palette .control-label{display:none}.flowgorithm-palette .control-icon{width:78px;height:34px;font-size:11px;font-weight:500;color:#111}.flowgorithm-palette .control-icon.fg-input{border-width:2px;background:#b0e0ff;border-color:#5080a0;transform:skew(-24deg)}.flowgorithm-palette .control-icon.fg-input span{transform:skew(24deg)}.flowgorithm-palette .control-icon.fg-output{border-width:2px;background:#d0ffd0;border-color:#70a070;transform:skew(-24deg)}.flowgorithm-palette .control-icon.fg-output span{transform:skew(24deg)}.flowgorithm-palette .control-icon.fg-declare{width:78px;height:34px;clip-path:none;border:2px solid #a0a070;background:#ffffd0}.flowgorithm-palette .control-icon.fg-declare:before{content:"";position:absolute;left:8px;top:0;bottom:0;border-left:1px solid #a0a070}.flowgorithm-palette .control-icon.fg-assign{width:78px;height:34px;border:2px solid #a0a070;background:#ffffd0}.flowgorithm-palette .control-icon.fg-if{width:58px;height:34px;border:1px solid #a07070;background:#ffd0d0;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);transform:none;margin-left:0}.flowgorithm-palette .control-icon.fg-if span{transform:none}.flowgorithm-palette .control-icon.fg-call{border:1px solid #9070a0;background:#f0e0ff}.flowgorithm-palette .control-icon.fg-call:before,.flowgorithm-palette .control-icon.fg-call:after{background:#9070a0;width:1px}.flowgorithm-palette .control-icon.fg-loop{border:1px solid #a08040;background:#ffe0a0;clip-path:polygon(14% 0,86% 0,100% 50%,86% 100%,14% 100%,0 50%)}.control-palette.flowgorithm-palette{display:flex;flex-direction:column;gap:8px;padding:8px}.flowgorithm-groups{display:flex;flex-direction:column;gap:10px}.flow-control-group{display:flex;flex-direction:column;gap:5px}.flow-control-group-title{text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.35px;color:#65727d;margin:2px 2px 1px}.flowgorithm-palette .control-item{display:grid;grid-template-columns:84px minmax(0,1fr);gap:8px;align-items:center;justify-content:stretch;width:100%;padding:6px 7px;border:1px solid #d1d8de;border-radius:6px;background:#fff;cursor:grab}.flowgorithm-palette .control-item:hover{background:#f0f4f7;border-color:#9bb6c8}.flowgorithm-palette .control-label{display:block}.flowgorithm-palette .control-label strong{font-size:12px;font-weight:600}.flowgorithm-palette .control-icon{justify-self:center}.control-icon{width:38px;height:31px;display:flex;align-items:center;justify-content:center;position:relative;color:#29485d;font-weight:800}.control-icon.process{border:2px solid #58758a;border-radius:3px;background:#fff}.control-icon.decision{width:27px;height:27px;border:2px solid #c27b18;background:#fff8e8;transform:rotate(45deg);margin-left:5px}.control-icon.decision span{transform:rotate(-45deg)}.control-icon.io{width:34px;height:27px;border:2px solid #3d83b6;background:#eef7ff;transform:skew(-12deg)}.control-icon.terminator{border:2px solid #358d57;border-radius:18px;background:#edf9f1}.control-icon.stop-sign{width:38px;height:38px;border:2px solid #8b2b25;background:#ffd7d3;clip-path:polygon(30% 0,70% 0,100% 30%,100% 70%,70% 100%,30% 100%,0 70%,0 30%)}.control-icon.rounded{border:2px solid #7255a5;border-radius:8px;background:#f6f2ff}.control-icon.dfd-process{border:2px solid #222;border-radius:8px;background:#d3d3d3}.control-icon.entity{border:2px solid #222;background:#d0d0d0;box-shadow:-5px -5px 0 -2px #d0d0d0,-5px -5px 0 0 #222}.control-icon.store{border:2px solid #222;background:#fff}.control-icon.store:before{content:attr(data-kind);width:12px;border-right:2px solid #222;height:100%;display:flex;align-items:center;justify-content:center;font-size:10px}.control-icon.table{border:2px solid #496b83;border-radius:3px;background:linear-gradient(#365d78 0 10px,#fff 10px)}.control-icon.textbox{font-size:22px;border:1px dashed #8a98a3;background:#fff}.control-icon.fg-assign{border:2px solid #a0a070;border-radius:2px;background:#ffffd0}.control-icon.fg-declare{width:34px;height:27px;background:#ffffd0;border:2px solid #a0a070;clip-path:polygon(12% 0,88% 0,100% 50%,88% 100%,12% 100%,0 50%)}.control-icon.fg-input{width:34px;height:27px;border:2px solid #5080a0;background:#b0e0ff;transform:skew(-12deg)}.control-icon.fg-output{width:34px;height:27px;border:2px solid #70a070;background:#d0ffd0;transform:skew(12deg)}.control-icon.fg-if{width:27px;height:27px;border:2px solid #a07070;background:#ffd0d0;transform:rotate(45deg);margin-left:5px}.control-icon.fg-if span{transform:rotate(-45deg)}.control-icon.fg-loop{width:34px;height:27px;border:2px solid #a08040;background:#ffe0a0;clip-path:polygon(14% 0,86% 0,100% 50%,86% 100%,14% 100%,0 50%)}.control-icon.fg-call{border:2px solid #9070a0;background:#f0e0ff}.control-icon.fg-call:before,.control-icon.fg-call:after{content:"";position:absolute;top:0;bottom:0;width:2px;background:#9070a0}.control-icon.fg-call:before{left:7px}.control-icon.fg-call:after{right:7px}.control-icon.fg-comment{border:1px dashed #8c8458;background:#fffde8;font-size:10px;color:#6e6743}.control-label strong{display:block;font-size:12px}.control-label small{display:block;color:#6a7781;font-size:10px;line-height:1.25;margin-top:2px}.right-panel{border-left:1px solid var(--line);overflow:auto;position:relative}.inspector-resize-handle{position:absolute;top:0;left:-5px;bottom:0;width:10px;cursor:col-resize;z-index:25;background:transparent}.inspector-resize-handle:hover,.inspector-resize-handle.active{background:rgba(36,117,168,.18)}.panel-head{height:39px;display:flex;align-items:center;justify-content:space-between;padding:0 10px;background:#e7ebef;border-bottom:1px solid var(--line);font-weight:750;color:#34424e}.source-meta{padding:9px 10px;border-bottom:1px solid var(--line);background:#f5f7f9;color:#5d6a75;font-size:12px;line-height:1.4}.editor-wrap{position:relative;flex:1;min-height:0;background:#17212b}.line-numbers{position:absolute;left:0;top:0;bottom:0;width:43px;padding:11px 7px;color:#72808d;background:#111920;text-align:right;font:13px/1.55 Consolas,"Courier New",monospace;white-space:pre;overflow:hidden;user-select:none;border-right:1px solid #2d3943}.source-editor{position:absolute;inset:0 0 0 43px;width:calc(100% - 43px);height:100%;resize:none;border:0;outline:0;padding:11px 12px;background:#17212b;color:#e4ebf0;caret-color:#ffb33f;tab-size:2;font:13px/1.55 Consolas,"Courier New",monospace;white-space:pre;overflow:auto}.source-footer{padding:7px 9px;border-top:1px solid var(--line);background:#eef2f5}.parse-status{min-height:19px;color:#52616c;font-size:12px}.parse-status.error{color:#a8332a}.canvas-shell{position:relative;min-width:0;min-height:0;overflow:hidden;background-color:var(--canvas);background-image:radial-gradient(#c5ced6 1px,transparent 1px);background-size:20px 20px}.canvas-shell.no-grid{background-image:none}#diagramSvg{width:100%;height:100%;display:block;touch-action:none;cursor:grab;user-select:none}#diagramSvg.panning{cursor:grabbing}.node{cursor:move}.node .body{filter:drop-shadow(0 1px 1px rgba(0,0,0,.17))}.node.selected .selection{display:block}.selection{display:none;fill:none;stroke:#e74c3c;stroke-width:2;stroke-dasharray:6 4;vector-effect:non-scaling-stroke}.edge{fill:none;stroke:#000;stroke-width:3;vector-effect:non-scaling-stroke;pointer-events:none}.edge.hovered{stroke:#e74c3c}.edge.drop-target{stroke:#e00000!important;stroke-width:5!important;filter:drop-shadow(0 0 3px rgba(224,0,0,.7))}.edge.selected{stroke:#e74c3c;stroke-width:3;stroke-dasharray:8 5;animation:edgeMarch .65s linear infinite}@keyframes edgeMarch{to{stroke-dashoffset:-13}}.edge-hit{fill:none;stroke:transparent;stroke-width:36;vector-effect:non-scaling-stroke;pointer-events:stroke;cursor:pointer}.flow-insert-arrow{cursor:pointer}.flow-insert-arrow .flow-insert-halo{fill:#fff;fill-opacity:.96;stroke:#d94138;stroke-width:1.6;vector-effect:non-scaling-stroke}.flow-insert-arrow:hover .flow-insert-halo{fill:#fff1ef;stroke:#b62822;stroke-width:2}.relationship-cardinality{pointer-events:none}.relationship-cardinality.selected line,.relationship-cardinality.selected circle{stroke:#e74c3c}.edge-label{cursor:pointer}.edge-label rect{fill:rgba(255,255,255,.92);stroke:#d2d9df;stroke-width:1}.edge-label.selected rect{stroke:#e74c3c;stroke-width:1.5}.edge-label text{pointer-events:none}.canvas-hint{position:absolute;left:12px;bottom:12px;padding:6px 9px;border:1px solid #c9d1d8;border-radius:4px;background:rgba(255,255,255,.88);color:#64727d;font-size:12px;pointer-events:none}.loading-cover{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(238,242,245,.88);z-index:20;font-size:16px;font-weight:750;color:#435260}.inspector{padding:12px}.empty{padding:30px 16px;text-align:center;color:var(--muted)}.info-card{border:1px solid #d3dae0;border-radius:6px;background:#fff;margin-bottom:11px;overflow:hidden}.info-card h3{font-size:13px;margin:0;padding:9px 10px;background:#edf1f4;border-bottom:1px solid #d7dde2}.info-body{padding:10px}.field{display:grid;grid-template-columns:86px minmax(0,1fr);gap:7px;align-items:center;margin-bottom:8px}.field:last-child{margin-bottom:0}.field label{font-size:11px;color:#5d6a75}.field input,.field select,.field textarea{width:100%;border:1px solid #bcc6ce;border-radius:4px;padding:5px 6px;background:#fff}.field .multiline-field{display:grid!important;grid-template-columns:minmax(0,1fr) 32px!important;grid-template-rows:auto!important;gap:6px!important;align-items:start!important;width:100%!important;max-width:100%!important;min-width:0!important;box-sizing:border-box!important;grid-column:2!important}.field .multiline-field>textarea{display:block!important;grid-column:1!important;grid-row:1!important;width:100%!important;min-width:0!important;max-width:100%!important;box-sizing:border-box!important;height:32px;min-height:32px;resize:none;overflow:hidden;white-space:pre-wrap}.field .multiline-field>.multiline-toggle{display:flex!important;grid-column:2!important;grid-row:1!important;justify-self:end!important;align-items:center!important;justify-content:center!important;width:32px!important;min-width:32px!important;max-width:32px!important;height:32px!important;min-height:32px!important;margin:0!important;padding:2px!important;box-sizing:border-box!important}.field .multiline-field>textarea[rows]:not([rows="1"]){height:110px!important;min-height:110px!important;resize:vertical!important;overflow:auto!important}.field input[type=color]{height:31px;padding:2px}.recent-colours-block{margin-top:8px;padding-top:8px;border-top:1px solid #e0e5e9}.recent-colours-title{font-size:11px;color:#5d6a75;margin-bottom:6px}.recent-colours{display:flex;gap:6px;flex-wrap:wrap;min-height:25px;align-items:center}.recent-colour{width:25px!important;height:25px!important;min-width:25px;padding:0!important;border:1px solid #8f9aa3!important;border-radius:4px!important;box-shadow:inset 0 0 0 1px rgba(255,255,255,.45);cursor:pointer}.recent-colours-empty{font-size:10px;color:#84909a}.format-checks{display:flex;gap:8px;flex-wrap:wrap;font-size:11px;color:#53616d}.format-checks label{display:flex;align-items:center;gap:3px}.format-checks input{width:auto}.floating-text{cursor:move}.floating-text text{pointer-events:none}.floating-text .text-hit{fill:rgba(255,255,255,.001);stroke:none;pointer-events:all}.floating-text .text-selection{display:none;fill:none;stroke:#e74c3c;stroke-width:1.5;stroke-dasharray:5 3;vector-effect:non-scaling-stroke;pointer-events:none}.floating-text.selected .text-selection{display:block}.mini-actions{display:flex;gap:5px;flex-wrap:wrap}.mini-btn{border:1px solid #bec7cf;border-radius:4px;background:#fff;padding:6px 8px;cursor:pointer}.mini-btn:hover{background:#edf2f6}.syntax-help{font-size:12px;line-height:1.5;color:#53616d}.syntax-help code{display:block;white-space:pre-wrap;background:#17212b;color:#dce5eb;padding:8px;border-radius:4px;margin-top:6px;font-family:Consolas,"Courier New",monospace}.statusbar{display:flex;align-items:center;gap:18px;padding:0 10px;background:#dfe5e9;border-top:1px solid #c3cbd2;color:#52606b;font-size:12px}.statusbar .grow{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.modal-backdrop{position:fixed;inset:0;z-index:500;display:flex;align-items:center;justify-content:center;padding:18px;background:rgba(13,20,27,.57)}.modal{display:flex;flex-direction:column;width:min(680px,100%);max-height:min(760px,92vh);background:#fff;border-radius:8px;box-shadow:0 18px 55px rgba(0,0,0,.36);overflow:hidden}.modal.small{width:min(490px,100%)}.modal-head{display:flex;justify-content:space-between;align-items:center;padding:13px 16px;background:#edf1f4;border-bottom:1px solid #cdd4da}.modal-head h2{font-size:17px;margin:0}.modal-close{border:0;background:transparent;font-size:22px;color:#63717d;cursor:pointer}.modal-body{padding:15px 16px;overflow:auto}.modal-foot{display:flex;justify-content:flex-end;gap:8px;padding:10px 16px;border-top:1px solid #d4dae0}.modal button{border:1px solid #b9c2ca;border-radius:4px;background:#fff;padding:7px 12px;cursor:pointer}.modal button.primary{background:var(--blue);border-color:var(--blue-dark);color:#fff}.modal textarea{width:100%;min-height:130px;border:1px solid #b9c3cb;border-radius:5px;padding:8px;resize:vertical}.new-object-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:9px}.new-object-choice{display:grid!important;grid-template-columns:46px minmax(0,1fr);gap:9px;align-items:center;text-align:left!important;padding:10px!important}.new-object-choice strong{display:block}.new-object-choice small{display:block;color:#687582;font-size:11px;margin-top:3px;line-height:1.3}.share-note{color:#5c6974;line-height:1.48}.share-option{display:flex;align-items:flex-start;gap:9px;margin:13px 0;padding:10px;background:#f7f9fa;border:1px solid #d4dae0;border-radius:5px}.share-option input{margin-top:3px}.share-option label{font-weight:700}.share-option small{display:block;margin-top:3px;color:#66737e;font-weight:400;line-height:1.4}.share-link-row{display:flex;gap:7px;margin-top:7px}.share-link-row input{flex:1;min-width:0;border:1px solid #b9c3cb;border-radius:4px;padding:8px;background:#f8fafb}.share-link-row button{background:var(--blue);color:#fff;border-color:var(--blue-dark)}.share-status{min-height:20px;margin-top:8px;color:#5b6974;font-size:13px}.share-status.error{color:#a83228}.toast-stack{position:fixed;right:15px;bottom:41px;z-index:1000;display:flex;flex-direction:column;gap:8px;pointer-events:none}.toast{min-width:230px;max-width:390px;background:#25323c;color:#fff;border-radius:5px;padding:10px 12px;box-shadow:var(--shadow)}.toast.error{background:#9f332a}.toast.success{background:#267346}@media(max-width:1180px){.workspace{grid-template-columns:var(--source-width) min(var(--controls-width,156px),220px) minmax(300px,1fr) 0}.right-panel{visibility:hidden}.tool-label{display:none}}@media(max-width:820px){.workspace{grid-template-columns:126px minmax(280px,1fr)}.source-resize-handle{display:none}.source-panel{position:absolute;left:0;top:93px;bottom:28px;width:min(390px,88vw);transform:translateX(-100%);transition:.2s;box-shadow:3px 0 14px rgba(0,0,0,.2)}.source-panel.mobile-open{transform:translateX(0)}.controls-panel{grid-column:1}.menu-strip{display:none}.title-wrap{min-width:100px}}@media(max-width:560px){.workspace{grid-template-columns:minmax(280px,1fr)}.controls-panel{display:none}}@media print{.topbar,.toolbar,.source-panel,.controls-panel,.right-panel,.statusbar,.canvas-hint{display:none!important}.app,.workspace,.canvas-shell{display:block;width:100%;height:100%;background:#fff}#diagramSvg{width:100vw;height:100vh}}
 
 
-/* Execution console and current-control spotlight — Charter 0.0.6 */
+/* Execution console and current-control spotlight — Charter 0.0.7 */
 .run-output{
   background:#000!important;color:#fff!important;
   font-family:Consolas,"Lucida Console","Courier New",monospace!important;
@@ -4391,7 +4469,7 @@ if ($showLanding) {
 }
 @media(prefers-reduced-motion:reduce){.node.run-active .body{animation:none!important;filter:drop-shadow(0 0 25px #ffba39) drop-shadow(0 0 60px #ff468a)!important}}
 
-/* Flowgorithm controls — Charter 0.0.6 baseline */
+/* Flowgorithm controls — Charter 0.0.7 baseline */
 .default-caption::placeholder{color:#8b949b;opacity:1;font-style:italic}
 .node .body{vector-effect:non-scaling-stroke}.node.drop-control-target .body{stroke:#e00000!important;stroke-width:5!important;filter:drop-shadow(0 0 4px rgba(224,0,0,.65))!important;vector-effect:non-scaling-stroke}.node.drop-control-target .selection{display:block!important;stroke:#e00000!important;stroke-width:3!important;stroke-dasharray:none!important;vector-effect:non-scaling-stroke}
 .flowgorithm-palette svg.control-icon,.new-object-choice svg.control-icon{display:block;background:transparent!important;border:0!important;clip-path:none!important;overflow:visible}
@@ -4507,7 +4585,6 @@ body.source-panel-hidden .workspace{grid-template-columns:var(--controls-width,1
 </div></div>
 <div class="menu"><button type="button">Diagram</button><div class="dropdown">
 <button data-action="new-object">New Object…</button><hr>
-<button data-action="render">Render source <kbd>Ctrl+Enter</kbd></button>
 <button data-action="auto-layout">Auto-layout</button>
 <button data-action="fit">Fit diagram</button>
 <button data-action="toggle-grid">Toggle grid</button>
@@ -4530,6 +4607,7 @@ body.source-panel-hidden .workspace{grid-template-columns:var(--controls-width,1
 <button type="button" data-charter-view="controls">✓ Controls / Navigator</button>
 <button type="button" data-charter-view="inspector">✓ Inspector</button>
 <button type="button" data-charter-view="canvas">✓ Canvas</button><hr>
+<button data-action="render">Render source <kbd>Ctrl+Enter</kbd></button>
 <button type="button" data-charter-reset="all">Reset all panels</button>
 </div></div>
 <div class="menu"><button type="button">Help</button><div class="dropdown">
@@ -4549,7 +4627,6 @@ body.source-panel-hidden .workspace{grid-template-columns:var(--controls-width,1
 <button type="button" class="tool-btn charter-interaction-active" id="charterMoveMode" aria-pressed="true" aria-label="Move: drag controls and pan canvas" title="Move controls and pan the canvas"><svg class="charter-mode-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 13V6a1.5 1.5 0 0 1 3 0v5-7a1.5 1.5 0 0 1 3 0v7-5a1.5 1.5 0 0 1 3 0v5-2a1.5 1.5 0 0 1 3 0v5c0 4-2.5 7-7 7h-2c-2 0-3-1-4-2l-3-4a1.8 1.8 0 0 1 2.8-2.2L8 15"/></svg><span>Move</span></button>
 <button type="button" class="tool-btn" id="charterSelectMode" aria-pressed="false" aria-label="Select: drag a rectangle to select controls" title="Click and drag to box-select controls"><svg class="charter-mode-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m5 3 14 9-7 1-3 7-4-17Z"/><path d="m12 13 5 7"/></svg><span>Select</span></button>
 </div>
-<button class="tool-btn" data-action="render" title="Render source (Ctrl+Enter)">⟳ <span class="tool-label">Render</span></button>
 <button class="tool-btn" data-action="run" id="runProgramBtn" title="Run the flowchart">▶ <span class="tool-label">Run</span></button>
 <button class="tool-btn" data-action="auto-layout" title="Auto-layout">⌘</button>
 <button class="tool-btn" data-action="fit" title="Fit diagram">⛶</button>
@@ -4608,7 +4685,7 @@ let interactionMode="move",marqueeState=null,marqueeElement=null,canvasPaintFram
 let panState=null,dragState=null,renderTimer=null,autosaveTimer=null,sharedAutosaveTimer=null,dirty=false,sourceResizeState=null,controlsResizeState=null,inspectorResizeState=null,edgeClickTimer=null,lastNodePointer={id:null,time:0};
 let serverShareId=null,serverShareUrl=null,serverNewSessionUrl=null,localProjectKey=null;
 let changeRevision=0,serverSaveChain=Promise.resolve();
-let undoHistory=[],undoRestoring=false,sourceUndoActive=false,sourceUndoTimer=null,titleUndoActive=false,titleUndoTimer=null;
+let undoHistory=[],redoHistory=[],undoRestoring=false,sourceUndoActive=false,sourceUndoTimer=null,titleUndoActive=false,titleUndoTimer=null;
 
 function clone(value){return JSON.parse(JSON.stringify(value));}
 function now(){return Date.now();}
@@ -4643,6 +4720,9 @@ function selectItem(kind,id,additive=false){
     if(additive){if(selectedItems.has(key))selectedItems.delete(key);else selectedItems.add(key);}
     else{selectedItems.clear();selectedItems.add(key);}
     syncPrimarySelection();
+    // A completed selection automatically restores Move while retaining the selection.
+    // Do not trigger a redraw here: the invoking pointer handler renders once.
+    if(interactionMode==='select'&&selectedItems.size>0)setCanvasInteractionMode('move');
 }
 function selectedMovableItems(){
     const items=[];
@@ -4671,11 +4751,10 @@ function pushUndoSnapshot(snapshot=null){
     const last=undoHistory.length?undoHistory[undoHistory.length-1]:null;
     if(last&&last.serial===serial)return;
     undoHistory.push({serial,snapshot});
+    redoHistory=[];
     if(undoHistory.length>10)undoHistory.shift();
 }
-function undoLastChange(){
-    if(!undoHistory.length){toast('Nothing to undo.');return;}
-    const entry=undoHistory.pop(),snap=entry.snapshot;
+function restoreHistorySnapshot(snap,notification){
     undoRestoring=true;
     try{
         project=normaliseProject(clone(snap.project));
@@ -4687,11 +4766,29 @@ function undoLastChange(){
         el('lineType').value=project.settings.lineType;
         sourceEditor.value=project.source;
         updateLineNumbers();applyGrid();
-        selectedItems=new Set(Array.isArray(snap.selectedItems)?snap.selectedItems:[]);if(!selectedItems.size){if(snap.selectedId)selectedItems.add(selectionKey('node',snap.selectedId));if(snap.selectedEdgeId)selectedItems.add(selectionKey('edge',snap.selectedEdgeId));if(snap.selectedTextId)selectedItems.add(selectionKey('textbox',snap.selectedTextId));}syncPrimarySelection();camera=clone(snap.camera||camera);
+        selectedItems=new Set(Array.isArray(snap.selectedItems)?snap.selectedItems:[]);
+        if(!selectedItems.size){
+            if(snap.selectedId)selectedItems.add(selectionKey('node',snap.selectedId));
+            if(snap.selectedEdgeId)selectedItems.add(selectionKey('edge',snap.selectedEdgeId));
+            if(snap.selectedTextId)selectedItems.add(selectionKey('textbox',snap.selectedTextId));
+        }
+        syncPrimarySelection();camera=clone(snap.camera||camera);
         renderFromSource({fit:false,markDirty:false});
         setDirty(true);saveAutosave();scheduleSharedAutosave(500);
-        toast('Undid the last change.','success');
+        toast(notification,'success');
     }finally{undoRestoring=false;}
+}
+function undoLastChange(){
+    if(!undoHistory.length){toast('Nothing to undo.');return;}
+    const current=makeUndoSnapshot(),entry=undoHistory.pop();
+    if(current){redoHistory.push({serial:JSON.stringify(current.project),snapshot:current});if(redoHistory.length>10)redoHistory.shift();}
+    restoreHistorySnapshot(entry.snapshot,'Undid the last change.');
+}
+function redoLastChange(){
+    if(!redoHistory.length){toast('Nothing to redo.');return;}
+    const current=makeUndoSnapshot(),entry=redoHistory.pop();
+    if(current){undoHistory.push({serial:JSON.stringify(current.project),snapshot:current});if(undoHistory.length>10)undoHistory.shift();}
+    restoreHistorySnapshot(entry.snapshot,'Redid the last change.');
 }
 function beginGroupedUndo(kind){
     if(kind==='source'){
@@ -4727,7 +4824,7 @@ function setProject(data,options={}){
         if(layoutChanged){project.layout.positions={};project.layout.positionsByKey={};}
     }
     serverShareId=options.serverShareId||null;serverShareUrl=options.serverShareUrl||null;serverNewSessionUrl=options.serverNewSessionUrl||null;localProjectKey=options.localProjectKey||null;
-    clearSelection();camera={x:0,y:0,scale:1};undoHistory=[];sourceUndoActive=false;titleUndoActive=false;
+    clearSelection();camera={x:0,y:0,scale:1};undoHistory=[];redoHistory=[];sourceUndoActive=false;titleUndoActive=false;
     el('diagramTitle').value=project.title;el('diagramType').value=project.diagramType;refreshSourceTypeOptions();el('sourceType').value=project.sourceType;el('direction').value=project.direction;el('lineType').value=project.settings.lineType;
     sourceEditor.value=project.source;if(isFixedVertical())stripFixedVerticalLayoutSource();updateLineNumbers();applyGrid();renderFromSource({fit:true,markDirty:false});renderControlPalette();setDirty(false);updateShareAddress(serverShareId);
 }
@@ -5594,7 +5691,26 @@ function fixedVerticalPositions(model){
     let bottom=Math.max(0,...levels.values());
     nodes.forEach(n=>{if(!levels.has(n.id)){levels.set(n.id,++bottom);columns.set(n.id,0);}});
     // Nodes reached from both arms rejoin the centre below their predecessors.
-    nodes.forEach(n=>{const parents=(incoming.get(n.id)||[]).map(e=>levels.get(e.from)).filter(Number.isFinite);if(parents.length>1){levels.set(n.id,Math.max(levels.get(n.id)||0,Math.max(...parents)+1));columns.set(n.id,0);}});
+    const mergeNodes=[];
+    nodes.forEach(n=>{const parents=(incoming.get(n.id)||[]).map(e=>levels.get(e.from)).filter(Number.isFinite);if(parents.length>1){levels.set(n.id,Math.max(levels.get(n.id)||0,Math.max(...parents)+1));columns.set(n.id,0);mergeNodes.push(n.id);}});
+    // The first traversal may have assigned descendants the column of the
+    // TRUE (left) arm before discovering that their predecessor is a merge.
+    // Centre only the single-successor chain after each merge. Stop at a
+    // fork, another join, or a back edge: branch arms must keep their columns.
+    mergeNodes.forEach(mergeId=>{
+        let id=mergeId;
+        const visited=new Set([id]);
+        while(true){
+            const next=outgoing.get(id)||[];
+            if(next.length!==1)break;
+            const childId=next[0].to;
+            if(visited.has(childId)||(incoming.get(childId)||[]).length!==1)break;
+            if((levels.get(childId)||0)<=(levels.get(id)||0))break;
+            columns.set(childId,0);
+            visited.add(childId);
+            id=childId;
+        }
+    });
     let last=Math.max(0,...levels.values());
     nodes.filter(n=>isFinish(n)&&n.id!==start.id).forEach(n=>{levels.set(n.id,Math.max(last,levels.get(n.id)||0));columns.set(n.id,0);});
     // Make sure no unrelated objects overlap in the same row/column.
@@ -5603,6 +5719,24 @@ function fixedVerticalPositions(model){
         if(n.id===start.id){row=0;col=0;}
         if(!isFinish(n))while(occupied.has(row+':'+col)){col=col===0?1:col>0?-col:1-col;}
         occupied.add(row+':'+col);positions.set(n.id,{x:col*330,y:row*140});
+    });
+    // Bring the two immediate conditional successors 20% closer to their
+    // parent centreline (SSW/SSE). Leave all other columns, merge nodes and
+    // vertical spacing unchanged. Process shallow branches first so nested
+    // branches are positioned relative to their already-adjusted parent.
+    const branchReach=330*0.8;
+    [...nodes].sort((a,b)=>(levels.get(a.id)||0)-(levels.get(b.id)||0)).forEach(parent=>{
+        if(!isBranch(parent))return;
+        const arms=outgoing.get(parent.id)||[];
+        if(arms.length!==2||arms[0].to===arms[1].to)return;
+        const parentPos=positions.get(parent.id);
+        if(!parentPos)return;
+        arms.forEach((edge,index)=>{
+            const child=byId.get(edge.to),childPos=positions.get(edge.to);
+            if(!child||!childPos||isFinish(child)||(incoming.get(edge.to)||[]).length!==1)return;
+            if((levels.get(child.id)||0)!==(levels.get(parent.id)||0)+1)return;
+            childPos.x=parentPos.x+(index===0?-branchReach:branchReach);
+        });
     });
     const ys=[...positions.values()].map(v=>v.y),mid=(Math.min(...ys)+Math.max(...ys))/2;
     positions.forEach(v=>{v.y-=mid;});
@@ -5724,6 +5858,7 @@ function finishMarquee(){
         if(b.x+width/2>=rect.x&&b.x-width/2<=rect.x+rect.width&&b.y+height/2>=rect.y&&b.y-height/2<=rect.y+rect.height)selectedItems.add(selectionKey('textbox',b.id));
     }
     syncPrimarySelection();
+    if(selectedItems.size>0)setCanvasInteractionMode('move');
     flushCanvasPaint();
 }
 let canvasNodesById=new Map(),canvasOutgoingById=new Map();
@@ -5738,7 +5873,8 @@ function renderDiagram(updateInspector=true){
     resetFlowDropPathCache();
     document.body.classList.toggle('fixed-vertical-mode',isFixedVertical());
     edgesLayer.innerHTML='';labelsLayer.innerHTML='';nodesLayer.innerHTML='';viewport.setAttribute('transform',`translate(${camera.x} ${camera.y}) scale(${camera.scale})`);
-    charterRoutedSegments=[];currentModel.edges.filter(e=>!getEdgeLayout(e).loopAround).forEach(renderEdge);currentModel.edges.filter(e=>getEdgeLayout(e).loopAround).forEach(renderEdge);viewport.appendChild(edgesLayer);viewport.appendChild(labelsLayer);viewport.appendChild(nodesLayer);currentModel.nodes.forEach(node=>{if(project.diagramType==='flowchart'&&project.sourceType==='flowgorithm'&&node.sourceKeyword){const label=flowgorithmKindVisual(node.flowKind,node.key,node.sourceValue,project.settings.showCaptions?node.sourceCaption:'').label;renderNode({...node,label});}else renderNode(node);});renderFloatingTextboxes();if(updateInspector)renderInspector();el('zoomReadout').textContent=Math.round(camera.scale*100)+'%';
+    if(!dragState)charterPrepareRouting();
+    charterRoutedSegments=[];charterArrowOverrides=new Map();currentModel.edges.filter(e=>!getEdgeLayout(e).loopAround).forEach(renderEdge);currentModel.edges.filter(e=>getEdgeLayout(e).loopAround).forEach(renderEdge);viewport.appendChild(edgesLayer);viewport.appendChild(labelsLayer);viewport.appendChild(nodesLayer);currentModel.nodes.forEach(node=>{if(project.diagramType==='flowchart'&&project.sourceType==='flowgorithm'&&node.sourceKeyword){const label=flowgorithmKindVisual(node.flowKind,node.key,node.sourceValue,project.settings.showCaptions?node.sourceCaption:'').label;renderNode({...node,label});}else renderNode(node);});renderFloatingTextboxes();charterRenderVisibleArrowheads();if(updateInspector)renderInspector();el('zoomReadout').textContent=Math.round(camera.scale*100)+'%';
 }
 function nodeAnchorInfo(fromId,toId){
     const a=currentPositions.get(fromId),b=currentPositions.get(toId),size=nodeSizes.get(fromId);if(!a||!b||!size)return{point:{x:a?a.x:0,y:a?a.y:0},normal:{x:1,y:0},side:'right'};
@@ -5790,18 +5926,149 @@ function distributedEdgeAnchors(edge){
     // This also prevents multiple outgoing connections from shifting off-centre.
     return own;
 }
-function avoidControlRoute(aInfo,bInfo){
-    const a=aInfo.point,b=bInfo.point,step=20,pad=12;
-    const excluded=new Set();
-    currentModel.nodes.forEach(n=>{const pos=currentPositions.get(n.id),size=nodeSizes.get(n.id);if(!pos||!size)return;if(Math.hypot(pos.x-a.x,pos.y-a.y)<Math.min(size.width,size.height)/2+3||Math.hypot(pos.x-b.x,pos.y-b.y)<Math.min(size.width,size.height)/2+3)return;const x1=Math.floor((pos.x-size.width/2-pad)/step),x2=Math.ceil((pos.x+size.width/2+pad)/step),y1=Math.floor((pos.y-size.height/2-pad)/step),y2=Math.ceil((pos.y+size.height/2+pad)/step);for(let x=x1;x<=x2;x++)for(let y=y1;y<=y2;y++)excluded.add(x+','+y);});
-    const start={x:Math.round(a.x/step),y:Math.round(a.y/step)},end={x:Math.round(b.x/step),y:Math.round(b.y/step)};
-    const key=p=>p.x+','+p.y,queue=[start],came=new Map([[key(start),null]]),distance=new Map([[key(start),0]]);
-    const limit=2500,bounds={x1:Math.min(start.x,end.x)-35,x2:Math.max(start.x,end.x)+35,y1:Math.min(start.y,end.y)-35,y2:Math.max(start.y,end.y)+35};
-    for(let i=0;queue.length&&i<limit;i++){queue.sort((u,v)=>(distance.get(key(u))+Math.abs(u.x-end.x)+Math.abs(u.y-end.y))-(distance.get(key(v))+Math.abs(v.x-end.x)+Math.abs(v.y-end.y)));const p=queue.shift();if(p.x===end.x&&p.y===end.y){const pts=[];let t=key(p);while(t){const pair=t.split(',').map(Number);pts.push({x:pair[0]*step,y:pair[1]*step});t=came.get(t);}pts.reverse();const all=[a,...pts,b];return{d:all.map((p,i)=>(i?'L ':'M ')+p.x+' '+p.y).join(' '),label:all[Math.floor(all.length/2)]};}for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){const q={x:p.x+dx,y:p.y+dy},k=key(q);if(q.x<bounds.x1||q.x>bounds.x2||q.y<bounds.y1||q.y>bounds.y2||excluded.has(k)||came.has(k))continue;came.set(k,key(p));distance.set(k,distance.get(key(p))+1);queue.push(q);}
-    }
-    return null;
+// A shared spatial grid is built once per geometry change. Each connector's
+// search ignores the two endpoint controls instead of rebuilding the obstacle
+// set for every edge. Cells are indexed by integers to avoid string allocations.
+const CHARTER_ROUTE_STEP=20;
+let charterObstacleGrid=null,charterObstacleSignature='',charterRouteCache=new Map();
+function charterGeometrySignature(){
+    const parts=[currentModel.nodes.length,currentModel.edges.length];
+    for(const n of currentModel.nodes){const p=currentPositions.get(n.id),z=nodeSizes.get(n.id);parts.push(n.id,p?.x,p?.y,z?.width,z?.height);}
+    return parts.join('|');
 }
-function edgeRoute(aInfo,bInfo,lineType,isErd){
+function charterPrepareRouting(){
+    const signature=charterGeometrySignature();
+    if(signature===charterObstacleSignature&&charterObstacleGrid)return;
+    charterObstacleSignature=signature;charterRouteCache.clear();
+    const occupied=new Map(),step=CHARTER_ROUTE_STEP,pad=12;
+    for(const n of currentModel.nodes){
+        const pos=currentPositions.get(n.id),size=nodeSizes.get(n.id);if(!pos||!size)continue;
+        const x1=Math.floor((pos.x-size.width/2-pad)/step),x2=Math.ceil((pos.x+size.width/2+pad)/step);
+        const y1=Math.floor((pos.y-size.height/2-pad)/step),y2=Math.ceil((pos.y+size.height/2+pad)/step);
+        for(let x=x1;x<=x2;x++)for(let y=y1;y<=y2;y++){
+            const key=x+','+y;let hits=occupied.get(key);if(!hits){hits=[];occupied.set(key,hits);}hits.push(n.id);
+        }
+    }
+    charterObstacleGrid=occupied;
+}
+// Binary min heap. Unlike sorting the full open list each iteration, heap
+// insert/remove are logarithmic in the number of pending candidates.
+function charterHeapPush(heap,item){
+    let i=heap.length;heap.push(item);
+    while(i){const parent=(i-1)>>1;if(heap[parent].score<=item.score)break;heap[i]=heap[parent];i=parent;}
+    heap[i]=item;
+}
+function charterHeapPop(heap){
+    const result=heap[0],last=heap.pop();if(heap.length){
+        let i=0;while(i*2+1<heap.length){let child=i*2+1;
+            if(child+1<heap.length&&heap[child+1].score<heap[child].score)child++;
+            if(last.score<=heap[child].score)break;heap[i]=heap[child];i=child;
+        }heap[i]=last;
+    }return result;
+}
+function avoidControlRoute(aInfo,bInfo,fromId=null,toId=null){
+    // Search rectilinear visibility corridors, NOT a 20px pixel grid. Grid
+    // rounding was producing diagonal joins and many tiny stair-step bends.
+    const start=aInfo.point,end=bInfo.point;
+    const rects=[];
+    for(const n of currentModel.nodes){
+        if(n.id===fromId||n.id===toId)continue;
+        const p=currentPositions.get(n.id),z=nodeSizes.get(n.id);
+        if(p&&z)rects.push({l:p.x-z.width/2-12,r:p.x+z.width/2+12,t:p.y-z.height/2-12,b:p.y+z.height/2+12});
+    }
+    const clear=(a,b)=>{
+        if(Math.abs(a.x-b.x)<.001){
+            const lo=Math.min(a.y,b.y),hi=Math.max(a.y,b.y);
+            return !rects.some(r=>a.x>r.l&&a.x<r.r&&hi>r.t&&lo<r.b);
+        }
+        if(Math.abs(a.y-b.y)<.001){
+            const lo=Math.min(a.x,b.x),hi=Math.max(a.x,b.x);
+            return !rects.some(r=>a.y>r.t&&a.y<r.b&&hi>r.l&&lo<r.r);
+        }
+        return false;
+    };
+    const compact=points=>{
+        const result=[];
+        for(const p of points){
+            if(result.length&&Math.abs(result[result.length-1].x-p.x)<.001&&Math.abs(result[result.length-1].y-p.y)<.001)continue;
+            result.push(p);
+            while(result.length>=3){const n=result.length,u=result[n-3],v=result[n-2],w=result[n-1];
+                if((Math.abs(u.x-v.x)<.001&&Math.abs(v.x-w.x)<.001)||(Math.abs(u.y-v.y)<.001&&Math.abs(v.y-w.y)<.001))result.splice(n-2,1);
+                else break;
+            }
+        }
+        return result;
+    };
+    const routeResult=points=>{const pts=compact(points),middle=pts[Math.floor((pts.length-1)/2)];return{d:pts.map((p,i)=>(i?'L ':'M ')+p.x+' '+p.y).join(' '),label:middle};};
+    // Prefer paths with zero or one bend, then an ordinary dogleg. These
+    // common layouts cost almost nothing and cannot produce zig-zags.
+    const options=[
+        [start,end],
+        [start,{x:start.x,y:end.y},end],
+        [start,{x:end.x,y:start.y},end],
+        [start,{x:start.x,y:(start.y+end.y)/2},{x:end.x,y:(start.y+end.y)/2},end],
+        [start,{x:(start.x+end.x)/2,y:start.y},{x:(start.x+end.x)/2,y:end.y},end]
+    ];
+    for(const raw of options){const pts=compact(raw);if(pts.every((p,i)=>i===0||clear(pts[i-1],p)))return routeResult(pts);}
+    // Sparse obstacle-corner visibility graph: the search pays for actual
+    // distance and every bend. Unlike a square grid, no staircase can occur.
+    const xs=new Set([start.x,end.x]),ys=new Set([start.y,end.y]);
+    for(const r of rects){xs.add(r.l-8);xs.add(r.r+8);ys.add(r.t-8);ys.add(r.b+8);}
+    xs.add(Math.min(start.x,end.x)-60);xs.add(Math.max(start.x,end.x)+60);
+    ys.add(Math.min(start.y,end.y)-60);ys.add(Math.max(start.y,end.y)+60);
+    const xx=[...xs].sort((a,b)=>a-b),yy=[...ys].sort((a,b)=>a-b);
+    if(xx.length*yy.length>16000)return null;
+    const sx=xx.indexOf(start.x),sy=yy.indexOf(start.y),tx=xx.indexOf(end.x),ty=yy.indexOf(end.y);
+    const key=(x,y,axis)=>x+','+y+','+axis;
+    const open=[],best=new Map(),parent=new Map(),first=key(sx,sy,0);
+    best.set(first,0);
+    charterHeapPush(open,{x:sx,y:sy,axis:0,cost:0,score:Math.abs(start.x-end.x)+Math.abs(start.y-end.y)});
+    let last=null,iterations=0;
+    while(open.length&&iterations++<14000){
+        const p=charterHeapPop(open),id=key(p.x,p.y,p.axis);
+        if(p.cost!==best.get(id))continue;
+        if(p.x===tx&&p.y===ty){last=id;break;}
+        for(const [dx,dy,axis] of [[1,0,1],[-1,0,1],[0,1,2],[0,-1,2]]){
+            const x=p.x+dx,y=p.y+dy;if(x<0||x>=xx.length||y<0||y>=yy.length)continue;
+            const from={x:xx[p.x],y:yy[p.y]},to={x:xx[x],y:yy[y]};if(!clear(from,to))continue;
+            const dist=Math.abs(to.x-from.x)+Math.abs(to.y-from.y);
+            const cost=p.cost+dist+(p.axis&&p.axis!==axis?70:0),next=key(x,y,axis);
+            if(cost>= (best.get(next)??Infinity))continue;
+            best.set(next,cost);parent.set(next,id);
+            charterHeapPush(open,{x,y,axis,cost,score:cost+Math.abs(to.x-end.x)+Math.abs(to.y-end.y)});
+        }
+    }
+    if(last===null)return null;
+    const points=[];
+    while(last){const [x,y]=last.split(',').map(Number);points.push({x:xx[x],y:yy[y]});last=parent.get(last);}
+    points.reverse();return routeResult(points);
+}
+// Keep the interactive drag shape after release whenever it is already safe.
+// The full visibility router is only needed when that preview intersects a
+// third-party control. This avoids a visible jump on pointer-up and prevents
+// re-running a costly graph search for ordinary, unobstructed connections.
+function charterPreviewRouteIsClear(route,fromId,toId){
+    if(!route||!route.d)return false;
+    const segments=charterSegmentsFromRoute(route.d);
+    if(!segments.length)return false;
+    const epsilon=0.01,clearance=12;
+    for(const [a,b] of segments){
+        const vertical=Math.abs(a.x-b.x)<epsilon;
+        const horizontal=Math.abs(a.y-b.y)<epsilon;
+        if(!vertical&&!horizontal)return false;
+        for(const node of currentModel.nodes){
+            if(node.id===fromId||node.id===toId)continue;
+            const pos=currentPositions.get(node.id),size=nodeSizes.get(node.id);
+            if(!pos||!size)continue;
+            const left=pos.x-size.width/2-clearance,right=pos.x+size.width/2+clearance;
+            const top=pos.y-size.height/2-clearance,bottom=pos.y+size.height/2+clearance;
+            if(vertical&&a.x>left&&a.x<right&&Math.max(a.y,b.y)>top&&Math.min(a.y,b.y)<bottom)return false;
+            if(horizontal&&a.y>top&&a.y<bottom&&Math.max(a.x,b.x)>left&&Math.min(a.x,b.x)<right)return false;
+        }
+    }
+    return true;
+}
+function edgeRoute(aInfo,bInfo,lineType,isErd,fromId=null,toId=null,fast=false){
     const a=aInfo.point,b=bInfo.point,stub=isErd?30:16,sa=pointAlong(a,aInfo.normal,stub),sb=pointAlong(b,bInfo.normal,stub);
     if(lineType==='direct'){
         if(isErd)return{d:`M ${a.x} ${a.y} L ${sa.x} ${sa.y} L ${sb.x} ${sb.y} L ${b.x} ${b.y}`,label:{x:(sa.x+sb.x)/2,y:(sa.y+sb.y)/2}};
@@ -5812,8 +6079,8 @@ function edgeRoute(aInfo,bInfo,lineType,isErd){
         if(isErd){const c1=pointAlong(sa,aInfo.normal,dist),c2=pointAlong(sb,bInfo.normal,dist);return{d:`M ${a.x} ${a.y} L ${sa.x} ${sa.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${sb.x} ${sb.y} L ${b.x} ${b.y}`,label:{x:(sa.x+sb.x)/2,y:(sa.y+sb.y)/2}};}
         const c1=pointAlong(a,aInfo.normal,dist),c2=pointAlong(b,bInfo.normal,dist);return{d:`M ${a.x} ${a.y} L ${sa.x} ${sa.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${sb.x} ${sb.y} L ${b.x} ${b.y}`,label:{x:(a.x+b.x)/2,y:(a.y+b.y)/2}};
     }
-    const safe=avoidControlRoute({point:sa,normal:aInfo.normal},{point:sb,normal:bInfo.normal});
-    if(safe)return{...safe,d:`M ${a.x} ${a.y} L ${sa.x} ${sa.y} `+safe.d.replace(/^M\s*[-\d.]+\s+[-\d.]+\s*/, '')+` L ${b.x} ${b.y}`};
+    // Build the same simple orthogonal route used while dragging first.
+    // If that path already avoids all controls, keep it on mouse-up.
     let parts=[`M ${a.x} ${a.y}`,`L ${sa.x} ${sa.y}`];
     const aHorizontal=aInfo.normal.x!==0,bHorizontal=bInfo.normal.x!==0;
     if(aHorizontal&&bHorizontal){const midX=(sa.x+sb.x)/2;parts.push(`L ${midX} ${sa.y}`,`L ${midX} ${sb.y}`);}
@@ -5821,7 +6088,11 @@ function edgeRoute(aInfo,bInfo,lineType,isErd){
     else if(aHorizontal){parts.push(`L ${sb.x} ${sa.y}`);}
     else{parts.push(`L ${sa.x} ${sb.y}`);}
     parts.push(`L ${sb.x} ${sb.y}`,`L ${b.x} ${b.y}`);
-    return{d:parts.join(' '),label:{x:(sa.x+sb.x)/2,y:(sa.y+sb.y)/2}};
+    const preview={d:parts.join(' '),label:{x:(sa.x+sb.x)/2,y:(sa.y+sb.y)/2}};
+    if(fast||charterPreviewRouteIsClear(preview,fromId,toId))return preview;
+    const safe=avoidControlRoute({point:sa,normal:aInfo.normal},{point:sb,normal:bInfo.normal},fromId,toId);
+    if(safe)return{...safe,d:`M ${a.x} ${a.y} L ${sa.x} ${sa.y} `+safe.d.replace(/^M\s*[-\d.]+\s+[-\d.]+\s*/, '')+` L ${sb.x} ${sb.y} L ${b.x} ${b.y}`};
+    return preview;
 }
 function splitCardinality(value){
     const text=String(value||'0..*--1').replace(/\s+/g,'');const match=text.match(/^(.*?)--(.*?)$/);return match?[match[1],match[2]]:['0..*','1'];
@@ -5919,7 +6190,7 @@ function renderFlowgorithmInsertArrow(edge,route,from,to){
    A compressed visibility grid avoids repeatedly scanning a dense pixel grid.
    Existing rendered connectors are forbidden corridors; controls have clearance.
    The forced vertical source leg is at least the width of its source control. */
-let charterRoutedSegments=[];
+let charterRoutedSegments=[],charterArrowOverrides=new Map();
 function charterSegmentsFromRoute(d){
     const segments=[],pattern=/([ML])\s*(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)/g;
     let match,previous=null;
@@ -5934,7 +6205,7 @@ function charterLoopRoute(edge,aInfo,bInfo){
     const source=currentPositions.get(edge.from),target=currentPositions.get(edge.to),sourceSize=nodeSizes.get(edge.from);
     if(!source||!target||!sourceSize)return null;
     const a={x:source.x,y:source.y+sourceSize.height/2};
-    const bInfoTop=fixedNodeAnchor(currentModel.nodes.find(n=>n.id===edge.to),'top');
+    const bInfoTop=fixedNodeAnchor(canvasNodesById.get(edge.to),'top');
     if(!bInfoTop)return null;
     const b=bInfoTop.point;
     const width=Math.max(60,sourceSize.width);
@@ -5978,11 +6249,12 @@ function charterLoopRoute(edge,aInfo,bInfo){
     if(xx.length*yy.length>25000)return null;
     const sx=xx.indexOf(depart.x),sy=yy.indexOf(depart.y),tx=xx.indexOf(enter.x),ty=yy.indexOf(enter.y);
     const key=(x,y,axis)=>x+','+y+','+axis;
-    const open=[{x:sx,y:sy,axis:0,cost:0,score:Math.abs(depart.x-enter.x)+Math.abs(depart.y-enter.y)}],best=new Map([[key(sx,sy,0),0]]),parents=new Map();
+    const open=[],best=new Map([[key(sx,sy,0),0]]),parents=new Map();
+    charterHeapPush(open,{x:sx,y:sy,axis:0,cost:0,score:Math.abs(depart.x-enter.x)+Math.abs(depart.y-enter.y)});
     let last=null,iterations=0;
     while(open.length&&iterations++<12000){
-        // Manhattan heuristic is admissible; bend penalty prefers clean routes.
-        open.sort((u,v)=>u.score-v.score);const here=open.shift(),hereKey=key(here.x,here.y,here.axis);
+        // Priority queue avoids repeatedly sorting the entire search frontier.
+        const here=charterHeapPop(open),hereKey=key(here.x,here.y,here.axis);
         if(here.cost!==best.get(hereKey))continue;
         if(here.x===tx&&here.y===ty){last=hereKey;break;}
         for(const [dx,dy,axis] of [[1,0,1],[-1,0,1],[0,1,2],[0,-1,2]]){
@@ -5992,7 +6264,7 @@ function charterLoopRoute(edge,aInfo,bInfo){
             const cost=here.cost+Math.abs(q.x-p.x)+Math.abs(q.y-p.y)+(here.axis&&here.axis!==axis?24:0),id=key(x,y,axis);
             if(cost>= (best.get(id)??Infinity))continue;
             best.set(id,cost);parents.set(id,hereKey);
-            open.push({x,y,axis,cost,score:cost+Math.abs(q.x-enter.x)+Math.abs(q.y-enter.y)});
+            charterHeapPush(open,{x,y,axis,cost,score:cost+Math.abs(q.x-enter.x)+Math.abs(q.y-enter.y)});
         }
     }
     if(!last)return null;
@@ -6012,11 +6284,58 @@ function charterLoopRoute(edge,aInfo,bInfo){
     const label=clean[Math.floor(clean.length/2)];
     return{d:clean.map((pt,i)=>(i?'L ':'M ')+pt.x+' '+pt.y).join(' '),label};
 }
+function charterRenderVisibleArrowheads(){
+    // Draw arrowheads after the nodes: SVG markers on edge paths are otherwise
+    // covered by the node layer at precisely the point they must remain visible.
+    let layer=viewport.querySelector('#charterArrowOverlay');
+    if(!layer){layer=createSvg('g',{id:'charterArrowOverlay','pointer-events':'none'});}
+    layer.replaceChildren();
+    for(const edge of currentModel.edges){
+        if(project.diagramType==='erd')continue;
+        const from=currentPositions.get(edge.from),to=currentPositions.get(edge.to);
+        if(!from||!to)continue;
+        const ports=distributedEdgeAnchors(edge);
+        const override=charterArrowOverrides.get(edge.id);
+        if(override)ports.b=override;
+        const draw=(anchor,inward)=>{
+            const p=anchor.point,n=anchor.normal;
+            // For destination edges the shaft comes from the outward normal;
+            // the tip is placed exactly on the destination control boundary.
+            const base={x:p.x+n.x*16,y:p.y+n.y*16};
+            const transverse={x:-n.y*7,y:n.x*7};
+            const d=`M ${p.x} ${p.y} L ${base.x+transverse.x} ${base.y+transverse.y} L ${base.x-transverse.x} ${base.y-transverse.y} Z`;
+            layer.appendChild(createSvg('path',{d,fill:'#5d7486',stroke:'#5d7486','stroke-width':1,'stroke-linejoin':'round'}));
+        };
+        draw(ports.b);
+        if(edge.bidirectional)draw(ports.a);
+    }
+    viewport.appendChild(layer);
+}
 function renderEdge(edge){
     const from=currentPositions.get(edge.from),to=currentPositions.get(edge.to);if(!from||!to)return;
-    const anchors=distributedEdgeAnchors(edge),aInfo=anchors.a,bInfo=anchors.b,isErd=project.diagramType==='erd',loopEnabled=getEdgeLayout(edge).loopAround,route=(loopEnabled?charterLoopRoute(edge,aInfo,bInfo):null)||edgeRoute(aInfo,bInfo,project.settings.lineType||'orthogonal',isErd),selected=isSelected('edge',edge.id);
+    const anchors=distributedEdgeAnchors(edge),aInfo=anchors.a,bInfo=anchors.b,isErd=project.diagramType==='erd',loopEnabled=getEdgeLayout(edge).loopAround,preview=!!dragState;
+    let route=null;
+    if(!preview&&!loopEnabled){
+        const cacheKey=edge.id+'|'+(project.settings.lineType||'orthogonal')+'|'+JSON.stringify([aInfo.point,bInfo.point,aInfo.normal,bInfo.normal]);
+        route=charterRouteCache.get(cacheKey)||null;
+        if(!route){route=edgeRoute(aInfo,bInfo,project.settings.lineType||'orthogonal',isErd,edge.from,edge.to,false);charterRouteCache.set(cacheKey,route);}
+    }
+    if(!route)route=(preview?null:(loopEnabled?charterLoopRoute(edge,aInfo,bInfo):null))||edgeRoute(aInfo,bInfo,project.settings.lineType||'orthogonal',isErd,edge.from,edge.to,preview);
+    // Loop routes enter at the TOP of the downstream control. Use the actual
+    // path endpoint for its arrowhead, not the generic side-centre anchor.
+    if(loopEnabled&&!preview&&route&&route.d){
+        const pieces=charterSegmentsFromRoute(route.d);
+        const finalSegment=pieces.length?pieces[pieces.length-1]:null;
+        const tip=finalSegment?finalSegment[1]:null;
+        const destination=canvasNodesById.get(edge.to);
+        const top=destination?fixedNodeAnchor(destination,'top'):null;
+        if(tip&&top&&Math.abs(tip.x-top.point.x)<0.1&&Math.abs(tip.y-top.point.y)<0.1){
+            charterArrowOverrides.set(edge.id,top);
+        }
+    }
+    const selected=isSelected('edge',edge.id);
     charterRoutedSegments.push(...charterSegmentsFromRoute(route.d));
-    const attrs={d:route.d,class:'edge'+(selected?' selected':'')};if(!isErd){attrs['marker-end']='url(#arrowHead)';if(edge.bidirectional)attrs['marker-start']='url(#arrowHead)';}
+    const attrs={d:route.d,class:'edge'+(selected?' selected':'')};if(!isErd){/* Visible arrowheads are rendered above the control layer. */}
     const path=createSvg('path',attrs);if(edge.id===highlightedDropEdgeId)path.classList.add('drop-target');edgesLayer.appendChild(path);
     const hit=createSvg('path',{d:route.d,class:'edge-hit','data-edge-id':edge.id});hit.addEventListener('pointerdown',event=>event.stopPropagation());hit.addEventListener('mouseenter',()=>path.classList.add('hovered'));hit.addEventListener('mouseleave',()=>path.classList.remove('hovered'));hit.addEventListener('click',event=>{event.stopPropagation();clearTimeout(edgeClickTimer);const additive=event.shiftKey;edgeClickTimer=setTimeout(()=>{selectItem('edge',edge.id,additive);renderDiagram();edgeClickTimer=null;},220);});hit.addEventListener('dblclick',event=>{clearTimeout(edgeClickTimer);edgeClickTimer=null;openFlowgorithmInsertFromPointer(edge,event);});edgesLayer.appendChild(hit);
     if(isErd){const parts=splitCardinality(edge.cardinality);const marks=createSvg('g',{class:'relationship-cardinality'+(selected?' selected':'')});drawCardinality(marks,aInfo,parts[0]);drawCardinality(marks,bInfo,parts[1]);edgesLayer.appendChild(marks);}
@@ -6056,6 +6375,7 @@ function startFloatingTextDrag(event){
     event.stopPropagation();
     if(interactionMode==='select'){
         selectItem('textbox',event.currentTarget.getAttribute('data-text-id'),event.shiftKey);
+        if(selectedItems.size>0)setCanvasInteractionMode('move');
         renderDiagram();
         return;
     }const id=event.currentTarget.getAttribute('data-text-id'),box=project.layout.textboxes[id];if(!box)return;
@@ -6194,6 +6514,7 @@ function startNodeDrag(event){
     if(interactionMode==='select'){
         const id=event.currentTarget.getAttribute('data-id');
         selectItem('node',id,event.shiftKey);
+        if(selectedItems.size>0)setCanvasInteractionMode('move');
         renderDiagram();
         return;
     }
@@ -6829,9 +7150,9 @@ function renderInspector(){
     if(runState.active||runState.view){renderRunInspector();return;}
     if(selectedItems.size>1){
         const counts={node:0,edge:0,textbox:0};selectedItems.forEach(key=>{const kind=key.slice(0,key.indexOf(':'));if(Object.prototype.hasOwnProperty.call(counts,kind))counts[kind]++;});const connectionState=selectedConnectionsState(),connectionAction=connectionState.connected?'disconnect-selected':'connect-selected',connectionLabel=connectionState.connected?'Disconnect selected':'Connect selected';
-        inspector.innerHTML=`<div class="info-card"><h3>Multiple selection</h3><div class="info-body"><p class="syntax-help"><strong>${selectedItems.size} items selected</strong><br>${counts.node} objects · ${counts.edge} connections · ${counts.textbox} textboxes</p><div class="mini-actions"><button class="mini-btn" data-inspector-action="${connectionAction}" ${counts.node<2?'disabled title="Select at least two objects"':''}>${connectionLabel}</button><button class="mini-btn" data-inspector-action="reverse-arrows" ${counts.edge===0&&counts.node<2?'disabled title="Select a connection or at least two connected objects"':''}>Reverse arrows</button><button class="mini-btn" data-inspector-action="delete-selected">Delete selected</button><button class="mini-btn" data-inspector-action="clear-selection">Clear selection</button></div></div></div><div class="info-card"><h3>Selection</h3><div class="info-body syntax-help">Hold <strong>Shift</strong> while clicking objects, textboxes or connections to add or remove them from the selection. <strong>${connectionLabel}</strong> updates the connections between the selected objects in selection order and updates Diagram Source. Drag any selected object to move all selected movable objects together.</div></div>`;
+        inspector.innerHTML=`<div class="info-card"><h3>Multiple selection</h3><div class="info-body"><p class="syntax-help"><strong>${selectedItems.size} items selected</strong><br>${counts.node} objects · ${counts.edge} connections · ${counts.textbox} textboxes</p><div class="mini-actions"><button class="mini-btn" data-inspector-action="copy-controls" ${counts.node===0?'disabled title="Select at least one control"':''}>Copy ${counts.node} ${counts.node===1?'control':'controls'}</button><button class="mini-btn" data-inspector-action="${connectionAction}" ${counts.node<2?'disabled title="Select at least two objects"':''}>${connectionLabel}</button><button class="mini-btn" data-inspector-action="reverse-arrows" ${counts.edge===0&&counts.node<2?'disabled title="Select a connection or at least two connected objects"':''}>Reverse arrows</button><button class="mini-btn" data-inspector-action="delete-selected">Delete selected</button><button class="mini-btn" data-inspector-action="clear-selection">Clear selection</button></div></div></div><div class="info-card"><h3>Selection</h3><div class="info-body syntax-help">Hold <strong>Shift</strong> while clicking objects, textboxes or connections to add or remove them from the selection. <strong>${connectionLabel}</strong> updates the connections between the selected objects in selection order and updates Diagram Source. Drag any selected object to move all selected movable objects together.</div></div>`;
         refreshRecentColourBlocks();
-    inspector.querySelectorAll('[data-inspector-action]').forEach(button=>button.onclick=()=>{const action=button.getAttribute('data-inspector-action');if(action==='connect-selected')connectSelectedObjects();if(action==='disconnect-selected')disconnectSelectedObjects();if(action==='reverse-arrows')reverseSelectedArrows();if(action==='delete-selected')deleteSelectedDiagramItem();if(action==='clear-selection'){clearSelection();renderDiagram();}});return;
+    inspector.querySelectorAll('[data-inspector-action]').forEach(button=>button.onclick=()=>{const action=button.getAttribute('data-inspector-action');if(action==='copy-controls')copyCanvasSelection(false);if(action==='connect-selected')connectSelectedObjects();if(action==='disconnect-selected')disconnectSelectedObjects();if(action==='reverse-arrows')reverseSelectedArrows();if(action==='delete-selected')deleteSelectedDiagramItem();if(action==='clear-selection'){clearSelection();renderDiagram();}});return;
     }
     const textBox=selectedTextId&&project.layout.textboxes?project.layout.textboxes[selectedTextId]:null;
     if(textBox){
@@ -6863,11 +7184,11 @@ function renderInspector(){
             if(!node){inspector.innerHTML=`<div class="info-card"><h3>Diagram</h3><div class="info-body syntax-help"><strong>${escapeHtml(project.diagramType.toUpperCase())}</strong><br>${escapeHtml(sourceDescription())}</div></div><div class="info-card"><h3>Canvas</h3><div class="info-body"><div class="mini-actions"><button class="mini-btn" data-inspector-action="fit">Fit</button><button class="mini-btn" data-inspector-action="layout">Auto-layout</button></div></div></div><div class="info-card"><h3>Connections</h3><div class="info-body syntax-help">Click any connector line or its caption to edit up to two captions, offsets and font formatting. Hold Shift while clicking to select multiple items. Double-click empty canvas space to add a floating textbox.</div></div>`;}
             else{
                 const p=currentPositions.get(node.id)||{x:0,y:0},extra=node.shape==='table'?`${node.fields.length} fields`:`${node.shape}`,visual=getNodeVisualStyle(node),colourCard=project.diagramType==='dfd'?`<div class="info-card"><h3>DFD object appearance</h3><div class="info-body"><div class="field"><label>Fill colour</label><input id="nodeFillColor" type="color" value="${escapeAttr(visual.fill)}"></div>${recentColoursBlockHtml()}<div class="mini-actions" style="margin-top:8px"><button class="mini-btn" data-inspector-action="reset-node-colour">Reset colour</button></div></div></div>`:'';
-                const isFg=project.diagramType==='flowchart'&&project.sourceType==='flowgorithm',nameValue=isFg?node.key:node.label,valueField=isFg?(node.flowKind==='assign'?`<div class="field"><label>Variable</label><input id="assignVariable" value="${escapeAttr(flowAssignParts(node.sourceValue).variable)}"></div><div class="field"><label>Expression</label><input id="assignExpression" value="${escapeAttr(flowAssignParts(node.sourceValue).expression)}"></div>`:`<div class="field"><label>${node.flowKind==='declare'?'Value':(['if','while','for'].includes(node.flowKind)?'Condition / parameters':'Value / expression')}</label><span class="multiline-field"><textarea id="nodeValue" rows="1">${escapeHtml(flowInspectorEditableText(node.sourceValue||''))}</textarea><button type="button" class="mini-btn multiline-toggle" data-multiline="nodeValue" title="Switch to multiple lines" aria-label="Edit multiple lines"><svg viewBox="0 0 20 20" width="19" height="19" aria-hidden="true"><path d="M3 5h14M3 9h14M3 13h14M3 17h9" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg></button></span></div>`):'',captionField=isFg&&project.settings.showCaptions?`<div class="field"><label>Caption</label>${node.flowKind==='output'?`<span class="multiline-field"><textarea id="nodeCaption" rows="1">${node.hasExplicitCaption?escapeHtml(flowDisplayText(node.sourceCaption)):''}</textarea><button type="button" class="mini-btn multiline-toggle" data-multiline="nodeCaption" title="Switch to multiple lines" aria-label="Edit multiple lines"><svg viewBox="0 0 20 20" width="19" height="19" aria-hidden="true"><path d="M3 5h14M3 9h14M3 13h14M3 17h9" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg></button></span>`:`<input id="nodeCaption" value="${node.hasExplicitCaption?escapeAttr(node.sourceCaption):''}" placeholder="${escapeAttr(flowgorithmDefaultCaption(node))}" class="${node.hasExplicitCaption?'':'default-caption'}">`}</div>`:'',fgType=(node.flowKind==='call'?'function':(node.flowKind==='start'||node.flowKind==='end'?'terminal':node.flowKind)),typeField=isFg?`<div class="field"><label>Type</label><select id="nodeType">${['terminal','if','stop','input','output','declare','assign','function','while','for'].map(type=>`<option value="${type}" ${type===fgType?'selected':''}>${type}</option>`).join('')}</select></div>`:`<div class="field"><label>Type</label><input value="${escapeAttr(extra)}" readonly></div>`;inspector.innerHTML=`<div class="info-card"><h3>Selected object</h3><div class="info-body"><div class="field"><label>Name</label><input id="nodeName" value="${escapeAttr(nameValue)}" ${(project.diagramType==='dfd'||isFg)?'':'readonly'}></div>${valueField}${captionField}${typeField}<div class="field"><label>X</label><input id="nodeX" type="number" value="${Math.round(p.x)}"></div><div class="field"><label>Y</label><input id="nodeY" type="number" value="${Math.round(p.y)}"></div><div class="mini-actions"><button class="mini-btn" data-inspector-action="reset-node">Reset position</button><button class="mini-btn" data-inspector-action="delete-selected">Delete object</button>${isFg&&currentModel.edges.some(e=>e.from===node.id&&e.to===node.id)?'<button class="mini-btn" data-inspector-action="delete-self-link">Delete self-reference</button>':''}${isFg?flowBranchToggleHtml(node):''}</div></div></div>${colourCard}<div class="info-card"><h3>Source-controlled</h3><div class="info-body syntax-help">${project.diagramType==='dfd'?'Change the object name here or edit the DFD shorthand. Position and colour are stored with the diagram layout.':isFg?'Name is the source identifier. Caption is the text shown inside the control; leave Caption blank to use the grey default shown in the field.':'Names, shapes, fields and connections are controlled by the text in the left panel.'}</div></div>`;
+                const isFg=project.diagramType==='flowchart'&&project.sourceType==='flowgorithm',nameValue=isFg?node.key:node.label,valueField=isFg?(node.flowKind==='assign'?`<div class="field"><label>Variable</label><input id="assignVariable" value="${escapeAttr(flowAssignParts(node.sourceValue).variable)}"></div><div class="field"><label>Expression</label><input id="assignExpression" value="${escapeAttr(flowAssignParts(node.sourceValue).expression)}"></div>`:`<div class="field"><label>${node.flowKind==='declare'?'Value':(['if','while','for'].includes(node.flowKind)?'Condition / parameters':'Value / expression')}</label><span class="multiline-field"><textarea id="nodeValue" rows="1">${escapeHtml(flowInspectorEditableText(node.sourceValue||''))}</textarea><button type="button" class="mini-btn multiline-toggle" data-multiline="nodeValue" title="Switch to multiple lines" aria-label="Edit multiple lines"><svg viewBox="0 0 20 20" width="19" height="19" aria-hidden="true"><path d="M3 5h14M3 9h14M3 13h14M3 17h9" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg></button></span></div>`):'',captionField=isFg&&project.settings.showCaptions?`<div class="field"><label>Caption</label>${node.flowKind==='output'?`<span class="multiline-field"><textarea id="nodeCaption" rows="1">${node.hasExplicitCaption?escapeHtml(flowDisplayText(node.sourceCaption)):''}</textarea><button type="button" class="mini-btn multiline-toggle" data-multiline="nodeCaption" title="Switch to multiple lines" aria-label="Edit multiple lines"><svg viewBox="0 0 20 20" width="19" height="19" aria-hidden="true"><path d="M3 5h14M3 9h14M3 13h14M3 17h9" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg></button></span>`:`<input id="nodeCaption" value="${node.hasExplicitCaption?escapeAttr(node.sourceCaption):''}" placeholder="${escapeAttr(flowgorithmDefaultCaption(node))}" class="${node.hasExplicitCaption?'':'default-caption'}">`}</div>`:'',fgType=(node.flowKind==='call'?'function':(node.flowKind==='start'||node.flowKind==='end'?'terminal':node.flowKind)),typeField=isFg?`<div class="field"><label>Type</label><select id="nodeType">${['terminal','if','stop','input','output','declare','assign','function','while','for'].map(type=>`<option value="${type}" ${type===fgType?'selected':''}>${type}</option>`).join('')}</select></div>`:`<div class="field"><label>Type</label><input value="${escapeAttr(extra)}" readonly></div>`;inspector.innerHTML=`<div class="info-card"><h3>Selected object</h3><div class="info-body"><div class="field"><label>Name</label><input id="nodeName" value="${escapeAttr(nameValue)}" ${(project.diagramType==='dfd'||isFg)?'':'readonly'}></div>${valueField}${captionField}${typeField}<div class="field"><label>X</label><input id="nodeX" type="number" value="${Math.round(p.x)}"></div><div class="field"><label>Y</label><input id="nodeY" type="number" value="${Math.round(p.y)}"></div><div class="mini-actions"><button class="mini-btn" data-inspector-action="copy-control">Copy Control</button><button class="mini-btn" data-inspector-action="reset-node">Reset position</button><button class="mini-btn" data-inspector-action="delete-selected">Delete object</button>${isFg&&currentModel.edges.some(e=>e.from===node.id&&e.to===node.id)?'<button class="mini-btn" data-inspector-action="delete-self-link">Delete self-reference</button>':''}${isFg?flowBranchToggleHtml(node):''}</div></div></div>${colourCard}<div class="info-card"><h3>Source-controlled</h3><div class="info-body syntax-help">${project.diagramType==='dfd'?'Change the object name here or edit the DFD shorthand. Position and colour are stored with the diagram layout.':isFg?'Name is the source identifier. Caption is the text shown inside the control; leave Caption blank to use the grey default shown in the field.':'Names, shapes, fields and connections are controlled by the text in the left panel.'}</div></div>`;
             }
         }
     }
-    inspector.querySelectorAll('[data-inspector-action]').forEach(button=>button.onclick=()=>{const action=button.getAttribute('data-inspector-action');if(action==='toggle-if-branch'&&selectedId)toggleFlowBranch(selectedId);if(action==='delete-self-link'&&selectedId){const owner=currentModel.nodes.find(n=>n.id===selectedId);if(owner){const lines=sourceEditor.value.split('\n');const removes=new Set(currentModel.edges.filter(e=>e.from===owner.id&&e.to===owner.id).map(e=>e.sourceLineIndex));if(removes.size){pushUndoSnapshot();sourceEditor.value=lines.filter((_,i)=>!removes.has(i)).join('\n');project.source=sourceEditor.value;updateLineNumbers();renderFromSource({fit:false});setDirty(true);persistLayoutSoon();}}}if(action==='fit')fitDiagram();if(action==='layout')autoLayout();if(action==='delete-selected')deleteSelectedDiagramItem();if(action==='clear-selection'){clearSelection();renderDiagram();}if(action==='reset-node'&&selectedId){pushUndoSnapshot();const node=currentModel.nodes.find(n=>n.id===selectedId);delete project.layout.positions[selectedId];if(node)delete project.layout.positionsByKey[nodeLayoutKey(node)];renderFromSource({fit:false});setDirty(true);persistLayoutSoon();}if(action==='reset-node-colour'&&selectedId){pushUndoSnapshot();const node=currentModel.nodes.find(n=>n.id===selectedId);delete project.layout.nodeStyles[selectedId];if(node)delete project.layout.nodeStylesByKey[nodeLayoutKey(node)];setDirty(true);renderDiagram();persistLayoutSoon();}if(action==='reset-link'&&selectedEdgeId){pushUndoSnapshot();delete project.layout.links[selectedEdgeId];setDirty(true);renderDiagram();persistLayoutSoon();}});
+    inspector.querySelectorAll('[data-inspector-action]').forEach(button=>button.onclick=()=>{const action=button.getAttribute('data-inspector-action');if(action==='copy-control')copyCanvasSelection(false);if(action==='toggle-if-branch'&&selectedId)toggleFlowBranch(selectedId);if(action==='delete-self-link'&&selectedId){const owner=currentModel.nodes.find(n=>n.id===selectedId);if(owner){const lines=sourceEditor.value.split('\n');const removes=new Set(currentModel.edges.filter(e=>e.from===owner.id&&e.to===owner.id).map(e=>e.sourceLineIndex));if(removes.size){pushUndoSnapshot();sourceEditor.value=lines.filter((_,i)=>!removes.has(i)).join('\n');project.source=sourceEditor.value;updateLineNumbers();renderFromSource({fit:false});setDirty(true);persistLayoutSoon();}}}if(action==='fit')fitDiagram();if(action==='layout')autoLayout();if(action==='delete-selected')deleteSelectedDiagramItem();if(action==='clear-selection'){clearSelection();renderDiagram();}if(action==='reset-node'&&selectedId){pushUndoSnapshot();const node=currentModel.nodes.find(n=>n.id===selectedId);delete project.layout.positions[selectedId];if(node)delete project.layout.positionsByKey[nodeLayoutKey(node)];renderFromSource({fit:false});setDirty(true);persistLayoutSoon();}if(action==='reset-node-colour'&&selectedId){pushUndoSnapshot();const node=currentModel.nodes.find(n=>n.id===selectedId);delete project.layout.nodeStyles[selectedId];if(node)delete project.layout.nodeStylesByKey[nodeLayoutKey(node)];setDirty(true);renderDiagram();persistLayoutSoon();}if(action==='reset-link'&&selectedEdgeId){pushUndoSnapshot();delete project.layout.links[selectedEdgeId];setDirty(true);renderDiagram();persistLayoutSoon();}});
     const nodeName=el('nodeName'),nodeCaption=el('nodeCaption'),nodeValue=el('nodeValue'),nodeType=el('nodeType');
     // Keep explicit multiline mode active while the user is typing. In particular,
     // typing the first character must not cancel the mode before Enter is pressed.
@@ -7446,7 +7767,7 @@ Start -> End
     return`<p class="share-note">${escapeHtml(sourceDescription())}</p>${flowNote}<div class="syntax-help"><code>${escapeHtml(examples[project.sourceType]||examples.qcaa)}</code></div><p class="share-note">Changes render automatically after a short pause. Press <strong>Ctrl+Enter</strong> to render immediately.</p>`;
 }
 function showSyntaxHelp(){showModal('Notation help',syntaxHelpHtml(),'<button class="primary" data-done>Done</button>',false);el('modalRoot').querySelector('[data-done]').onclick=closeModal;}
-function showAbout(){showModal('About Charter','<p class="share-note"><strong>Charter 0.0.6</strong></p><p class="share-note">Charter 0.0.6 supports four diagram types: flowcharts, data-flow diagrams, entity-relationship diagrams and mind maps. Flowcharts, DFDs and ERDs use a text-driven editor; mind maps use a hierarchical visual editor.</p><p class="share-note">Shared diagrams are stored in the MySQL or MariaDB database configured in <code>charter-config.php</code>. Anyone with an unguessable editable share link can modify that shared copy. An always-new-session link creates an independent copy for every visitor.</p><p class="share-note">Copyright (c) 2026 Simon Walker &amp; Timothy Lever, Queensland Department of Education</p><p class="share-note"><a href="https://github.com/simonnjwalker/charter" target="_blank" rel="noopener noreferrer">https://github.com/simonnjwalker/charter</a></p>','<button class="primary" data-done>Done</button>',false);el('modalRoot').querySelector('[data-done]').onclick=closeModal;}
+function showAbout(){showModal('About Charter','<p class="share-note"><strong>Charter 0.0.7</strong></p><p class="share-note">Charter 0.0.7 supports four diagram types: flowcharts, data-flow diagrams, entity-relationship diagrams and mind maps. Flowcharts, DFDs and ERDs use a text-driven editor; mind maps use a hierarchical visual editor.</p><p class="share-note">Shared diagrams are stored in the MySQL or MariaDB database configured in <code>charter-config.php</code>. Anyone with an unguessable editable share link can modify that shared copy. An always-new-session link creates an independent copy for every visitor.</p><p class="share-note">Copyright (c) 2026 Simon Walker &amp; Timothy Lever, Queensland Department of Education</p><p class="share-note"><a href="https://github.com/simonnjwalker/charter" target="_blank" rel="noopener noreferrer">https://github.com/simonnjwalker/charter</a></p>','<button class="primary" data-done>Done</button>',false);el('modalRoot').querySelector('[data-done]').onclick=closeModal;}
 
 async function sendServerRequest(action,payload=null,query={}){const address=new URL(window.location.href);address.search='';address.hash='';address.searchParams.set('charter_action',action);Object.keys(query).forEach(k=>address.searchParams.set(k,query[k]));const options={cache:'no-store'};if(payload!==null){options.method='POST';options.headers={'Content-Type':'application/json'};options.body=JSON.stringify(payload);}const response=await fetch(address.pathname+address.search,options),raw=await response.text();let data;try{data=JSON.parse(raw);}catch(error){throw new Error('The server returned an invalid response. '+raw.slice(0,180));}if(!data.ok)throw new Error(data.error||'The server request failed.');return data;}
 async function loadSharedProject(shareId){el('loadingCover').classList.remove('hidden');try{const data=await sendServerRequest('load',null,{share:shareId});setProject(data.project,{serverShareId:data.shareId,serverShareUrl:data.shareUrl,serverNewSessionUrl:data.newSessionUrl});toast('Shared diagram loaded.','success');}finally{el('loadingCover').classList.add('hidden');}}
@@ -7512,7 +7833,7 @@ function buildExportSvg(){
     const b=diagramBounds(),pad=42,width=Math.ceil(b.width+pad*2),height=Math.ceil(b.height+pad*2),out=createSvg('svg',{xmlns:NS,width,height,viewBox:`${b.minX-pad} ${b.minY-pad} ${width} ${height}`}),defs=svg.querySelector('defs').cloneNode(true);
     const markerPath=defs.querySelector('#arrowHead path');if(markerPath)markerPath.setAttribute('fill','#5d7486');
     const style=createSvg('style');style.textContent='text{font-family:Inter,Segoe UI,Arial,sans-serif}.edge{fill:none;stroke:#000;stroke-width:3}.edge-label rect{fill:#fff;fill-opacity:.96;stroke:#d2d9df;stroke-width:1}.node .body{filter:drop-shadow(0 1px 1px rgba(0,0,0,.17))}';defs.appendChild(style);out.appendChild(defs);
-    out.appendChild(createSvg('rect',{x:b.minX-pad,y:b.minY-pad,width,height,fill:'#fff'}));const content=createSvg('g');content.appendChild(edgesLayer.cloneNode(true));content.appendChild(labelsLayer.cloneNode(true));content.appendChild(nodesLayer.cloneNode(true));
+    out.appendChild(createSvg('rect',{x:b.minX-pad,y:b.minY-pad,width,height,fill:'#fff'}));const content=createSvg('g');content.appendChild(edgesLayer.cloneNode(true));content.appendChild(labelsLayer.cloneNode(true));content.appendChild(nodesLayer.cloneNode(true));const arrowOverlay=viewport.querySelector('#charterArrowOverlay');if(arrowOverlay)content.appendChild(arrowOverlay.cloneNode(true));
     content.querySelectorAll('.selection,.text-selection,.edge-hit,.text-hit,.flow-insert-arrow').forEach(node=>node.remove());content.querySelectorAll('.node,.floating-text,.edge-label,.edge').forEach(node=>node.classList.remove('selected'));
     content.querySelectorAll('.edge').forEach(path=>{path.setAttribute('fill','none');path.setAttribute('stroke','#000');path.setAttribute('stroke-width','3');});
     content.querySelectorAll('.edge-label rect').forEach(rect=>{rect.setAttribute('fill','#ffffff');rect.setAttribute('fill-opacity','.96');rect.setAttribute('stroke','#d2d9df');rect.setAttribute('stroke-width','1');});
@@ -7668,14 +7989,14 @@ async function saveWithShortcut(){
         toast(error.message,'error');
     }
 }
-document.addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&!event.altKey&&!event.target.closest('input,textarea,select,[contenteditable=true]')&&['x','c','v'].includes(event.key.toLowerCase())){event.preventDefault();const key=event.key.toLowerCase();if(key==='x')copyCanvasSelection(true);else if(key==='c')copyCanvasSelection(false);else pasteCanvasClipboard();return;}if(event.key==='Escape'&&runState.active&&!el('modalRoot').querySelector('.modal-backdrop')){stopProgramRun();return;}if(event.key==='Escape'&&el('modalRoot').querySelector('.modal-backdrop')){event.preventDefault();event.stopPropagation();closeModal();return;}if(event.altKey&&event.shiftKey&&event.key==='Enter'){event.preventDefault();toggleProgramRun();return;}if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'&&!event.shiftKey){event.preventDefault();undoLastChange();return;}if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){event.preventDefault();saveWithShortcut();}if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='o'){event.preventDefault();openJson();}if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();renderFromSource({fit:false});}if((event.key==='Delete'||event.key==='Backspace')&&!event.target.matches('input,textarea,select,[contenteditable=true]')&&selectedItems.size){event.preventDefault();deleteSelectedDiagramItem();return;}if(event.key==='Escape'){if(el('modalRoot').querySelector('.modal-backdrop')){event.preventDefault();event.stopPropagation();closeModal();}else closeMenus();}});
+document.addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&!event.altKey&&!event.target.closest('input,textarea,select,[contenteditable=true]')&&['x','c','v'].includes(event.key.toLowerCase())){event.preventDefault();const key=event.key.toLowerCase();if(key==='x')copyCanvasSelection(true);else if(key==='c')copyCanvasSelection(false);else pasteCanvasClipboard();return;}if(event.key==='Escape'&&runState.active&&!el('modalRoot').querySelector('.modal-backdrop')){stopProgramRun();return;}if(event.key==='Escape'&&el('modalRoot').querySelector('.modal-backdrop')){event.preventDefault();event.stopPropagation();closeModal();return;}if(event.altKey&&event.shiftKey&&event.key==='Enter'){event.preventDefault();toggleProgramRun();return;}if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='z'&&!event.shiftKey){event.preventDefault();undoLastChange();return;}if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='y'&&!event.shiftKey){event.preventDefault();redoLastChange();return;}if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){event.preventDefault();saveWithShortcut();}if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='o'){event.preventDefault();openJson();}if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();renderFromSource({fit:false});}if((event.key==='Delete'||event.key==='Backspace')&&!event.target.matches('input,textarea,select,[contenteditable=true]')&&selectedItems.size){event.preventDefault();deleteSelectedDiagramItem();return;}if(event.key==='Escape'){if(el('modalRoot').querySelector('.modal-backdrop')){event.preventDefault();event.stopPropagation();closeModal();}else closeMenus();}});
 
-async function initialise(){initialiseSourcePanelResize();initialiseSidePanelResize();setProject(INITIAL_PROJECT);setSourcePanelVisible(REQUESTED_SOURCE_VISIBILITY==='show'||(REQUESTED_SOURCE_VISIBILITY!=='hide'&&window.innerWidth>820));if(INITIAL_NEW_SESSION_ID){try{await createNewSession(INITIAL_NEW_SESSION_ID);}catch(error){toast(error.message,'error');}}else if(INITIAL_SHARE_ID){try{await loadSharedProject(INITIAL_SHARE_ID);}catch(error){toast(error.message,'error');}}}
+async function initialise(){initialiseSourcePanelResize();initialiseSidePanelResize();setProject(INITIAL_PROJECT);setSourcePanelVisible(REQUESTED_SOURCE_VISIBILITY!=='hide');if(INITIAL_NEW_SESSION_ID){try{await createNewSession(INITIAL_NEW_SESSION_ID);}catch(error){toast(error.message,'error');}}else if(INITIAL_SHARE_ID){try{await loadSharedProject(INITIAL_SHARE_ID);}catch(error){toast(error.message,'error');}}}
 initialise();
 })();
 </script>
 <script>
-/* Charter 0.0.6: unified independent horizontal panel resizing and View visibility. */
+/* Charter 0.0.7: unified independent horizontal panel resizing and View visibility. */
 (()=>{
  'use strict';
  const workspace=document.querySelector('.workspace');if(!workspace)return;
@@ -7687,31 +8008,49 @@ initialise();
  const defaults=mind?{source:0,controls:220,inspector:304,settings:44}:{source:390,controls:190,inspector:270,settings:44};
  let sizes={...defaults};let hidden=new Set(mind?['source']:[]);
  try{const saved=JSON.parse(localStorage.getItem('charter.panels.v004')||'null');if(saved){sizes={...sizes,...saved.sizes};hidden=new Set(saved.hidden||[]);}}catch(_){}
+ if(!mind){const sourceOverride=new URLSearchParams(location.search).get('source');if(sourceOverride==='show')hidden.delete('source');else if(sourceOverride==='hide')hidden.add('source');}
  const name={settings:'Diagram settings',source:'Diagram source',controls:mind?'Navigator / Outline':'Controls',canvas:'Canvas',inspector:'Inspector'};
  // Responsive visibility is temporary: never overwrite the user's View preferences.
  // Reserve space for both Canvas and Inspector before using optional side panels.
  let compactHidden=new Set();
  function effectiveHidden(k){return hidden.has(k)||compactHidden.has(k);}
  function calculateCompactLayout(){
+   // The Canvas is the only flexible column. Keep Controls and Inspector usable,
+   // collapsing Source first when the viewport cannot accommodate all panels.
    compactHidden=new Set();
    const available=Math.max(0,workspace.clientWidth||window.innerWidth);
-   const desiredInspector=hidden.has('inspector')?0:Math.min(sizes.inspector,Math.max(170,Math.floor(available*.42)));
-   const minCanvas=Math.min(320,Math.max(110,Math.floor(available*.36)));
-   let remaining=available-desiredInspector-minCanvas;
-   for(const k of ['source','controls']){
-     if(hidden.has(k))continue;
-     if(remaining<sizes[k]+16)compactHidden.add(k);
-     else remaining-=sizes[k];
+   // Keep Controls at its user-configured width during viewport resizing.
+   // The flexible Canvas takes the width reduction; never proportionally
+   // shrink (or auto-hide) Controls to satisfy a responsive breakpoint.
+   const controlsWidth=hidden.has('controls')?0:sizes.controls;
+   const inspectorWidth=hidden.has('inspector')?0:sizes.inspector;
+   const sourceWidth=hidden.has('source')?0:sizes.source;
+   // Only on exceptionally narrow viewports, temporarily collapse Source
+   // to leave room for Controls, Inspector and a small but usable Canvas.
+   // This does not change the user's saved source visibility preference.
+   const minimumCanvas=80;
+   if(!hidden.has('source')&&available<sourceWidth+controlsWidth+inspectorWidth+minimumCanvas){
+     compactHidden.add('source');
    }
-   return desiredInspector;
+   return {inspectorWidth,controlsWidth};
  }
 
  function refresh(persist=true){
-   const responsiveInspectorWidth=calculateCompactLayout();
+   const responsive=calculateCompactLayout();
    for(const [k,node] of Object.entries(map))if(node)node.classList.toggle('charter-view-hidden',effectiveHidden(k));
    document.body.classList.toggle('source-panel-hidden',effectiveHidden('source'));
    document.documentElement.style.setProperty('--charter-settings-height',hidden.has('settings')?'0px':sizes.settings+'px');
-   workspace.style.setProperty('grid-template-columns',order.map(k=>effectiveHidden(k)?'0px':k==='canvas'?'minmax(0,1fr)':(k==='inspector'?responsiveInspectorWidth:sizes[k])+'px').join(' '),'important');
+   // Explicit grid placement is essential: display:none otherwise shifts the
+   // Inspector into the Canvas's minmax(0,1fr) track and makes it enormous.
+   order.forEach((k,i)=>{if(map[k]){
+     map[k].style.setProperty('grid-column',String(i+1),'important');
+     map[k].style.setProperty('min-width','0');
+   }});
+   workspace.style.setProperty('grid-template-columns',order.map(k=>effectiveHidden(k)?'0px':k==='canvas'?'minmax(0,1fr)':(k==='inspector'?responsive.inspectorWidth:k==='controls'?responsive.controlsWidth:sizes[k])+'px').join(' '),'important');
+   // Earlier responsive styles forcibly conceal the Inspector and Controls.
+   // The View manager, rather than those legacy media rules, owns visibility.
+   if(map.inspector)map.inspector.style.setProperty('visibility',effectiveHidden('inspector')?'hidden':'visible','important');
+   if(map.controls)map.controls.style.setProperty('display',effectiveHidden('controls')?'none':'flex','important');
    for(const b of document.querySelectorAll('[data-charter-view]')){const k=b.dataset.charterView;b.textContent=(hidden.has(k)?'':'✓ ')+(name[k]||k);b.setAttribute('aria-checked',String(!hidden.has(k)));}
    if(persist)try{localStorage.setItem('charter.panels.v004',JSON.stringify({sizes,hidden:[...hidden]}));}catch(_){}
    window.dispatchEvent(new Event('resize'));
