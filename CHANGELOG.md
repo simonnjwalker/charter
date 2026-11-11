@@ -1,3 +1,9 @@
+## [0.0.7] - 2026-11-11
+### Added
+- Copy button when controls selected
+### Fixed
+- Lagging and resizing issues
+
 ## [0.0.6] - 2026-11-08
 ### Added
 - Cut-Copy-Paste
